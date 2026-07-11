@@ -1,0 +1,216 @@
+{
+  "info": {
+    "name": "Advix API",
+    "description": "Готова колекция за тестване на Advix. Импортни я в Postman и цъкай заявките отгоре надолу.\n\nВажно: пусни '2. Вход' ПЪРВО — той автоматично запазва токена, за да работят следващите заявки.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "accessToken", "value": "" },
+    { "key": "refreshToken", "value": "" },
+    { "key": "clientId", "value": "" },
+    { "key": "applicationId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Health (без вход)",
+      "request": {
+        "method": "GET",
+        "auth": { "type": "noauth" },
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "2. Вход — Консултант (запазва токена)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('accessToken', json.accessToken);",
+              "pm.collectionVariables.set('refreshToken', json.refreshToken);",
+              "console.log('Токенът е запазен - следващите заявки ще работят.');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "auth": { "type": "noauth" },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"consultant@e2e.bg\",\n  \"password\": \"Test1234!\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+      }
+    },
+    {
+      "name": "3. Кой съм аз (/auth/me)",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] }
+      }
+    },
+    {
+      "name": "4. Създай клиент (запазва clientId)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.id) pm.collectionVariables.set('clientId', json.id);",
+              "console.log('clientId запазен: ' + json.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"firstName\": \"Иван\",\n  \"lastName\": \"Петров\",\n  \"phone\": \"0888123456\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/clients", "host": ["{{baseUrl}}"], "path": ["clients"] }
+      }
+    },
+    {
+      "name": "5. Списък клиенти (с търсене)",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/clients?page=1&limit=20&search=Иван",
+          "host": ["{{baseUrl}}"],
+          "path": ["clients"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "20" },
+            { "key": "search", "value": "Иван" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "6. Един клиент (по clientId)",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/clients/{{clientId}}", "host": ["{{baseUrl}}"], "path": ["clients", "{{clientId}}"] }
+      }
+    },
+    {
+      "name": "7. Попълни данни на клиента (ЕГН, доход, GDPR)",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"egn\": \"8506151239\",\n  \"netSalary\": 420000,\n  \"contractType\": \"PERMANENT\",\n  \"gdprConsentAt\": \"2026-07-11T10:00:00.000Z\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/clients/{{clientId}}", "host": ["{{baseUrl}}"], "path": ["clients", "{{clientId}}"] }
+      }
+    },
+    {
+      "name": "8. Създай заявка (запазва applicationId)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.id) pm.collectionVariables.set('applicationId', json.id);",
+              "console.log('applicationId запазен: ' + json.id);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"loanType\": \"MORTGAGE_WITH_PURCHASE\",\n  \"amount\": 25000000,\n  \"termMonths\": 300,\n  \"purpose\": \"Покупка на апартамент\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/loan-applications", "host": ["{{baseUrl}}"], "path": ["loan-applications"] }
+      }
+    },
+    {
+      "name": "9. Опит: директно към банка (ще откаже - демо)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"toStatus\": \"READY_FOR_BANK\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/loan-applications/{{applicationId}}/transition", "host": ["{{baseUrl}}"], "path": ["loan-applications", "{{applicationId}}", "transition"] }
+      }
+    },
+    {
+      "name": "10. Правилен преход: NEW → COLLECTING_INFO",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"toStatus\": \"COLLECTING_INFO\",\n  \"note\": \"започваме събиране на данни\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/loan-applications/{{applicationId}}/transition", "host": ["{{baseUrl}}"], "path": ["loan-applications", "{{applicationId}}", "transition"] }
+      }
+    },
+    {
+      "name": "11. Виж заявката + историята на статусите",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/loan-applications/{{applicationId}}", "host": ["{{baseUrl}}"], "path": ["loan-applications", "{{applicationId}}"] }
+      }
+    },
+    {
+      "name": "12. Вход — Админ (за създаване на организация)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.collectionVariables.set('accessToken', json.accessToken);",
+              "console.log('Влязъл като админ.');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "auth": { "type": "noauth" },
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@test.bg\",\n  \"password\": \"Test1234!\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+      }
+    },
+    {
+      "name": "13. Създай нова организация (само админ)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Нова Посредническа Фирма ЕООД\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/tenants", "host": ["{{baseUrl}}"], "path": ["tenants"] }
+      }
+    }
+  ]
+}
