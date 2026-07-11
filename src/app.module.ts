@@ -1,0 +1,61 @@
+import {
+  MiddlewareConsumer,
+  Module,
+  NestModule,
+  ValidationPipe,
+} from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
+import { APP_GUARD, APP_PIPE } from '@nestjs/core';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { AuthModule } from './auth/auth.module';
+import { ClientsModule } from './clients/clients.module';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RolesGuard } from './common/guards/roles.guard';
+import {
+  PUBLIC_ROUTES,
+  TenantMiddleware,
+} from './common/middleware/tenant.middleware';
+import configuration from './config/configuration';
+import { validationSchema } from './config/validation.schema';
+import { DatabaseModule } from './database/database.module';
+import { HealthController } from './health/health.controller';
+import { LoanApplicationsModule } from './loan-applications/loan-applications.module';
+import { TenantsModule } from './tenants/tenants.module';
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [configuration],
+      validationSchema,
+      validationOptions: { abortEarly: false },
+    }),
+    ThrottlerModule.forRoot([{ ttl: 15 * 60 * 1000, limit: 5 }]),
+    DatabaseModule,
+    AuthModule,
+    TenantsModule,
+    ClientsModule,
+    LoanApplicationsModule,
+  ],
+  controllers: [HealthController],
+  providers: [
+    {
+      provide: APP_PIPE,
+      useValue: new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    },
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+  ],
+})
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer
+      .apply(TenantMiddleware)
+      .exclude(...PUBLIC_ROUTES)
+      .forRoutes('{*splat}');
+  }
+}
