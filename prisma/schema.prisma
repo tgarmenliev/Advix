@@ -1,0 +1,781 @@
+// =============================================================================
+// CRM ПЛАТФОРМА ЗА КРЕДИТНИ ПОСРЕДНИЦИ
+// Prisma Schema — schema-per-tenant архитектура
+// =============================================================================
+// Забележка: При schema-per-tenant всеки tenant получава копие на тази schema
+// в собствен PostgreSQL schema (напр. "tenant_abc.clients", "tenant_xyz.clients")
+// Глобалните таблици (Tenant, User) живеят в отделна "public" schema.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Забележка: при Prisma 7+ connection URL се конфигурира в prisma.config.ts —
+// тук се декларира само провайдърът на базата
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum LoanType {
+  CONSUMER              // Потребителски кредит
+  MORTGAGE_NO_PURCHASE  // Ипотечен БЕЗ покупка на имот
+  MORTGAGE_WITH_PURCHASE // Ипотечен С покупка на имот
+  BUSINESS              // Бизнес кредит
+}
+
+enum LoanStatus {
+  NEW                   // Нова заявка
+  COLLECTING_INFO       // Събиране на информация
+  WAITING_CLIENT        // Чака клиент
+  INTERNAL_PROCESSING   // Вътрешна обработка
+  READY_FOR_BANK        // Готова за банка
+  SENT_TO_BANKS         // Изпратена към банки
+  OFFERS_RECEIVED       // Получени оферти
+  OFFER_SELECTED        // Избрана оферта
+  APPLICATION_SUBMITTED // Кандидатстване за кредит
+  APPROVED              // Одобрен кредит
+  REJECTED_BY_BANK      // Отказан от банка
+  REJECTED_BY_CLIENT    // Отказан от клиент
+  DISBURSED             // Отпуснат (последният транш)
+  COMPLETED             // Приключен
+}
+
+enum ContractType {
+  PERMANENT             // Безсрочен трудов договор
+  FIXED_TERM            // Срочен трудов договор
+}
+
+enum RelatedPersonRole {
+  SPOUSE                // Съпруг/а
+  COHABITANT            // Съжител/ка
+  CO_BORROWER           // Съдлъжник
+}
+
+enum PropertyType {
+  APARTMENT             // Апартамент
+  HOUSE                 // Къща
+  SHOP                  // Магазин
+  OTHER                 // Друг вид
+}
+
+enum ConstructionType {
+  BRICK                 // Тухла
+  EPK                   // ЕПК
+  PANEL                 // Панел
+  OTHER                 // Друг вид
+}
+
+enum InquiryStatus {
+  SENT                  // Изпратено
+  REPLIED_NO_OFFER      // Отговорено без оферта
+  WAITING_OUR_RESPONSE  // Очакване на отговор от нас
+  OFFER_RECEIVED        // Получена оферта
+}
+
+enum OfferStatus {
+  PENDING               // Получена, неизбрана
+  SELECTED              // Избрана от клиента
+  REJECTED              // Отхвърлена
+  APPLICATION_SUBMITTED // Кандидатстване подадено
+  APPROVED              // Одобрена от банката
+  DISBURSED             // Отпусната
+}
+
+enum CommissionStatus {
+  EXPECTED              // Очаквана
+  ACCRUED               // Начислена
+  RECEIVED              // Получена
+}
+
+enum PartnerCommissionStatus {
+  PENDING               // Очаква плащане
+  PAID                  // Платена
+}
+
+enum DocumentType {
+  GDPR_DECLARATION          // GDPR Декларация
+  ID_CARD                   // Лична карта
+  BUSINESS_ANNUAL_REPORT    // Бизнес ГФО
+  BUSINESS_TAX_DECLARATION  // Бизнес ГДД
+  BUSINESS_INTERIM_REPORT   // Бизнес междинен отчет
+  BUSINESS_DESCRIPTION      // Представяне на фирмата
+  BUSINESS_LOAN_PURPOSE     // Обосновка на целта на кредита
+  OTHER                     // Друг документ
+}
+
+enum UserRole {
+  ADMIN                 // Администратор
+  CONSULTANT            // Консултант / Служител
+  PARTNER_A             // Партньор Модел А
+  PARTNER_B             // Партньор Модел Б
+  PARTNER_C             // Партньор Модел В
+  CLIENT                // Клиент
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  STATUS_CHANGE
+  LOGIN
+  DOCUMENT_UPLOAD
+  INQUIRY_SENT
+  OFFER_RECEIVED
+  OFFER_SELECTED
+  COMMISSION_UPDATE
+}
+
+// =============================================================================
+// ПОТРЕБИТЕЛИ И ОРГАНИЗАЦИЯ (живеят в "public" schema — глобални)
+// =============================================================================
+
+/// Организацията на кредитния посредник (tenant)
+model Tenant {
+  id          String   @id @default(uuid())
+  name        String                        // Наименование на фирмата посредник
+  schemaName  String   @unique              // Името на PostgreSQL schema за този tenant
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+}
+
+/// Потребител на системата (всички роли)
+model User {
+  id            String    @id @default(uuid())
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+
+  email         String    @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  phone         String?
+  role          UserRole
+
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Auth — refresh токените се инвалидират чрез инкрементиране на tokenVersion;
+  // пази се само bcrypt hash на активния refresh token, никога plaintext
+  tokenVersion     Int     @default(0)
+  refreshTokenHash String?
+
+  // Партньорски комисионен модел (само за PARTNER_*)
+  commissionPercent Int? 
+  commissionFixed   Int? 
+
+  // Връзки
+  assignedApplications  LoanApplication[] @relation("AssignedConsultant")
+  partnerApplications   LoanApplication[] @relation("PartnerOnApplication")
+  auditLogs             AuditLog[]
+  createdSecureLinks    SecureLink[]      @relation("CreatedSecureLinks")
+
+  @@index([tenantId])
+  @@index([email])
+}
+
+// =============================================================================
+// КЛИЕНТ
+// =============================================================================
+
+/// Клиентски профил
+model Client {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Soft delete — клиент с финансови/правни данни никога не се трие физически
+  deletedAt   DateTime?
+
+  // Лични данни — "хлабави" при създаване на lead; egn/netSalary/contractType
+  // стават задължителни при преход към READY_FOR_BANK (валидира се в workflow)
+  firstName   String
+  lastName    String?
+  egn         String?  @unique              // ЕГН — уникален идентификатор
+  age         Int?                          // Изчислява се автоматично от ЕГН
+  email       String?                               // За изпращане на Secure Link
+  phone       String?                               // Подава се на банките
+
+  // Професионален профил
+  employer          String?
+  jobTitle          String?
+  contractType      ContractType?
+  netSalary         Int?    
+
+  // Банкови възможности
+  canProvideIncomeProof     Boolean   @default(false)   // Удостоверение за доход
+  canTransferSalary         Boolean   @default(false)   // Превод на заплата в новата банка
+
+  // Текущи задължения (без рефинансиране)
+  existingLoansTotal        Int?   // Общ размер на кредитите
+  existingLoansMonthlyTotal Int?   // Обща месечна вноска
+
+  // GDPR
+  gdprConsentAt     DateTime?                           // Дата и час на дадено съгласие
+  gdprDocumentId    String?    
+  
+  familySize                Int?     // Общ брой членове на семейството (вкл. деца под 18)                         // Връзка към GDPR документа
+
+  // Семеен профил
+  familyMembers     FamilyMember[]
+
+  // Кредитни заявки
+  loanApplications  LoanApplication[]
+
+  // Документи на клиента
+  documents         Document[]
+
+  // Secure Links изпратени на клиента
+  secureLinks       SecureLink[]
+
+  @@index([egn])
+}
+
+// =============================================================================
+// ЧЛЕНОВЕ НА СЕМЕЙСТВОТО / СЪДЛЪЖНИЦИ
+// =============================================================================
+
+/// Съпруг/а, Съжител/ка или Съдлъжник
+/// Свързан към клиента (съществува веднъж, може да е съдлъжник по много заявки)
+model FamilyMember {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id])
+
+  role        RelatedPersonRole
+
+  // Лични данни
+  firstName   String
+  lastName    String
+  egn         String
+  age         Int
+  email       String?                               // За изпращане на Secure Link
+  phone       String?                               // Подава се на банките
+
+  // Професионален профил
+  employer          String?
+  jobTitle          String?
+  contractType      ContractType?
+  netSalary         Int?    
+
+  // Текущи задължения (без рефинансиране)
+  existingLoansTotal        Float?  
+  existingLoansMonthlyTotal Float?  
+
+  // GDPR — съдлъжникът също дава лични данни, нужно е отделно съгласие
+  gdprConsentAt     DateTime?                           // Дата и час на дадено съгласие
+  gdprDocumentId    String?                             // Връзка към GDPR документа в Object Storage
+
+  // Връзка към заявките, по които е съдлъжник
+  // (реализирана чрез junction таблица)
+  loanApplications  LoanApplicationFamilyMember[]
+
+  // Secure Links изпратени на съдлъжника
+  secureLinks       SecureLink[]
+
+  @@index([clientId])
+  @@index([egn])
+}
+
+/// Junction таблица: коя семейна роля участва по коя заявка
+/// Позволява един FamilyMember да е съдлъжник по много заявки
+model LoanApplicationFamilyMember {
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  familyMemberId    String
+  familyMember      FamilyMember    @relation(fields: [familyMemberId], references: [id])
+
+  assignedAt        DateTime        @default(now())
+
+  @@id([loanApplicationId, familyMemberId])
+}
+
+// =============================================================================
+// КРЕДИТНА ЗАЯВКА
+// =============================================================================
+
+/// Централният обект в системата
+model LoanApplication {
+  id            String      @id @default(uuid())
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  // Клиент и отговорни лица
+  clientId      String
+  client        Client      @relation(fields: [clientId], references: [id])
+
+  consultantId  String
+  consultant    User        @relation("AssignedConsultant", fields: [consultantId], references: [id])
+
+  partnerId     String?
+  partner       User?       @relation("PartnerOnApplication", fields: [partnerId], references: [id])
+
+  // Параметри на кредита
+  loanType      LoanType
+  amount        Int                 // Желан размер в евро
+  termMonths    Int                                       // Желан срок в месеци
+  purpose       String?                                  // Цел на кредита
+
+  // Статус
+  status        LoanStatus  @default(NEW)
+
+  // Вътрешни бележки
+  internalNotes String?
+
+  // Бизнес профил (само при loanType = BUSINESS)
+  businessProfile   BusinessProfile?
+
+  // Имоти (many-to-many — рядко повече от един, но архитектурно правилно)
+  properties        LoanApplicationProperty[]
+  familyMembers     LoanApplicationFamilyMember[]
+  bankInquiries     BankInquiry[]
+  bankOffers        BankOffer[]
+  commissionRecord  CommissionRecord?
+  documents         Document[]
+  statusHistory     LoanStatusHistory[]
+  auditLogs         AuditLog[]
+  secureLinks       SecureLink[]
+
+  @@index([clientId])
+  @@index([consultantId])
+  @@index([status])
+}
+
+/// История на статусите на заявката
+/// Всяка промяна на статус се записва тук
+model LoanStatusHistory {
+  id                String          @id @default(uuid())
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  fromStatus        LoanStatus?                         // null при първо създаване
+  toStatus          LoanStatus
+  changedAt         DateTime        @default(now())
+  changedByUserId   String
+  note              String?
+
+  @@index([loanApplicationId])
+}
+
+// =============================================================================
+// ИМОТ ЗА ИПОТЕКА
+// =============================================================================
+
+/// Имот — самостоятелен обект, независим от конкретна заявка
+/// Един имот може да участва в повече от една заявка (рядко, но възможно)
+/// Една заявка може да има повече от един имот (рядко изключение)
+model Property {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  propertyType      PropertyType
+  constructionType  ConstructionType?
+  yearBuilt         Int?
+  areaSquareMeters  Float?
+
+  // Местонахождение
+  city              String?
+  neighborhood      String?                               // Улица или квартал
+  streetNumber      String?
+
+  // Детайли за сградата (при апартамент)
+  floorNumber       Int?
+  totalFloors       Int?
+  additionalDetails String?
+
+  // Собственици на имота (свободен текст — може да е повече от един)
+  owners            String?                               // напр. "Иван Петров, Мария Петрова"
+
+  // Връзка към заявките (many-to-many през junction таблица)
+  loanApplications  LoanApplicationProperty[]
+}
+
+/// Junction таблица: кой имот участва в коя заявка
+/// Пази и допълнителен контекст за конкретната ипотека
+model LoanApplicationProperty {
+  id                String          @id @default(uuid())
+
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  propertyId        String
+  property          Property        @relation(fields: [propertyId], references: [id])
+
+  // В полза на коя банка е учредена ипотеката (ако вече е учредена)
+  mortgageBankId    String?
+  mortgageBank      Bank?           @relation("MortgageBank", fields: [mortgageBankId], references: [id])
+
+  // Пазарна цена (при бизнес обезпечение)
+  marketValue       Float?
+
+  assignedAt        DateTime        @default(now())
+
+  @@unique([loanApplicationId, propertyId])
+  @@index([loanApplicationId])
+  @@index([propertyId])
+}
+
+// =============================================================================
+// БАНКИ
+// =============================================================================
+
+/// Банка партньор
+model Bank {
+  id              String    @id @default(uuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  name            String    @unique
+  isActive        Boolean   @default(true)
+
+  // Вътрешна информация
+  contractNotes   String?                               // Особености по договора
+  commissionNotes String?                               // Комисионни схеми по типове кредит
+  bonusNotes      String?                               // Бонусни системи
+
+  // Свързани обекти
+  offices         BankOffice[]
+  contacts        BankContact[]
+  inquiries       BankInquiry[]
+  offers          BankOffer[]
+  mortgages       LoanApplicationProperty[] @relation("MortgageBank")
+}
+
+/// Офис на банката по град
+model BankOffice {
+  id        String  @id @default(uuid())
+  bankId    String
+  bank      Bank    @relation(fields: [bankId], references: [id])
+  city      String
+
+  @@index([bankId])
+}
+
+/// Служител за връзка в банката
+model BankContact {
+  id        String  @id @default(uuid())
+  bankId    String
+  bank      Bank    @relation(fields: [bankId], references: [id])
+
+  firstName String
+  lastName  String
+  email     String
+  phone     String?
+  city      String?
+
+  // Запитвания изпратени към този контакт
+  inquiries BankInquiry[]
+
+  @@index([bankId])
+}
+
+/// Глобален шаблон за банково запитване
+/// Един шаблон за всички банки, консултантът може да редактира преди изпращане
+model InquiryTemplate {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name      String                                        // Наименование (напр. "Стандартно запитване")
+  subject   String                                        // Тема на имейла
+  body      String                                        // Тяло — консултантът редактира преди изпращане
+  isDefault Boolean  @default(false)                      // Кой шаблон се зарежда по подразбиране
+}
+
+// =============================================================================
+// БАНКОВО ЗАПИТВАНЕ
+// =============================================================================
+
+/// Запитване изпратено от посредника към конкретна банка за конкретна заявка
+model BankInquiry {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  bankId            String
+  bank              Bank            @relation(fields: [bankId], references: [id])
+
+  bankContactId     String
+  bankContact       BankContact     @relation(fields: [bankContactId], references: [id])
+
+  sentAt            DateTime?                           // Дата и час на изпращане
+  sentContent       String?                             // Изпратеното съдържание (snapshot)
+  consultantNote    String?                             // Коментар от посредника към банката
+  status            InquiryStatus   @default(SENT)
+
+  // Оферта, получена по това запитване (ако има)
+  offer             BankOffer?
+
+  @@index([loanApplicationId])
+  @@index([bankId])
+}
+
+// =============================================================================
+// БАНКОВА ОФЕРТА
+// =============================================================================
+
+/// Оферта получена от банка по конкретна заявка
+model BankOffer {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  bankId            String
+  bank              Bank            @relation(fields: [bankId], references: [id])
+
+  // Обратна връзка към запитването (по което е получена офертата)
+  inquiryId         String?         @unique
+  inquiry           BankInquiry?    @relation(fields: [inquiryId], references: [id])
+
+  status            OfferStatus     @default(PENDING)
+
+  // Параметри на офертата (от калкулация-на-разходите-шаблон.xlsx)
+  totalRepayment          Int?   // Сума за връщане (главница + лихва)
+  propertyInsurance       Int?   // Застраховка на имота
+  lifeInsurance           Int?   // Застраховка Живот
+  propertyValuation       Int?   // Оценка на имота
+  preDisburseeFee         Int?   // Такса преди отпускане
+  mortgageSetupFee        Int?   // Учредяване на ипотека
+  accountMaintenanceFee   Int?   // Такса за обсл. на сметка (целия период)
+  creditCardIssueFee      Int?   // Такса за издаване на кредитна карта
+  creditCardMaintenanceFee Int?  // Такса за обсл. на кредитна карта (целия период)
+  monthlyPayment          Int?   // Месечна вноска (вкл. застраховка Живот)
+  interestRate            Float?    // Лихвен процент (напр. 0.0350 = 3.50%)
+  apr                     Float?    // ГПР
+  termMonths              Int?                          // Срок в месеци
+  totalPayment            Int?   // Общо плащане (вкл. всичко)
+
+  additionalConditions    String?                       // Допълнителни условия
+  comments                String?                       // Коментари
+
+  // Траншове (при кредити с поетапно отпускане)
+  disbursements   Disbursement[]
+
+  @@index([loanApplicationId])
+  @@index([bankId])
+}
+
+// =============================================================================
+// УСВОЯВАНЕ И КОМИСИОНИ
+// =============================================================================
+
+/// Транш на отпускане на кредита
+model Disbursement {
+  id            String    @id @default(uuid())
+  offerId       String
+  offer         BankOffer @relation(fields: [offerId], references: [id])
+
+  trancheNumber Int                                     // Номер на транша (1, 2, 3...)
+  amount        Int                // Усвоена сума на транша
+  disbursedAt   DateTime                                // Дата на усвояване
+
+  // Комисиона за този транш
+  commission    TrancheCommission?
+
+  @@index([offerId])
+}
+
+/// Запис за комисиони към цялата кредитна заявка
+model CommissionRecord {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  loanApplicationId String          @unique
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  // Финансов резултат
+  netRevenue        Int?         // Нетен приход за посредника
+
+  // Комисиона към партньор (ако има)
+  partnerCommissionPercent Int?   // Процент
+  partnerCommissionFixed   Int?  // Фиксирана сума
+  partnerCommissionPaidAt  DateTime?
+  partnerCommissionStatus  PartnerCommissionStatus?
+
+  // Комисиони по траншове
+  trancheCommissions TrancheCommission[]
+}
+
+/// Комисиона за конкретен транш
+model TrancheCommission {
+  id                  String            @id @default(uuid())
+  disbursementId      String            @unique
+  disbursement        Disbursement      @relation(fields: [disbursementId], references: [id])
+
+  commissionRecordId  String
+  commissionRecord    CommissionRecord  @relation(fields: [commissionRecordId], references: [id])
+
+  expectedAmount      Int?           // Очаквана комисиона
+  actualAmount        Int?           // Реално получена
+  occurredAt          DateTime?                             // Дата на възникване
+  status              CommissionStatus  @default(EXPECTED)
+
+  @@index([commissionRecordId])
+}
+
+// =============================================================================
+// БИЗНЕС ПРОФИЛ (разширение на LoanApplication при BUSINESS тип кредит)
+// =============================================================================
+
+/// Допълнителни данни за бизнес кредит
+/// Свързан 1:1 с LoanApplication — попълва се само когато loanType = BUSINESS
+model BusinessProfile {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  loanApplicationId String          @unique
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  // Данни за фирмата
+  companyName       String                                // Име на фирмата
+  businessActivity  String?                               // Предмет на дейност
+
+  // Собственици (свободен текст — може да е повече от един)
+  owners            String?                               // напр. "Иван Петров 50%, Мария Петрова 50%"
+
+  // Цел на кредита (специфично за бизнес — по-детайлно от общото purpose поле)
+  loanPurposeDetail String?
+
+  // Документите (ГФО, ГДД, междинни отчети и т.н.) вървят
+  // през общата Document таблица с loanApplicationId + съответния DocumentType
+  // Не се дублират полета тук
+}
+
+// =============================================================================
+// ДОКУМЕНТИ
+// =============================================================================
+
+/// Документ, свързан с клиент или кредитна заявка
+/// Файлът физически стои в Scaleway Object Storage
+/// Тук пазим само метаданните и линка
+model Document {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+
+  documentType      DocumentType
+  storageUrl        String                               // URL в Object Storage
+  fileName          String                               // Оригиналното файлово име
+
+  // Полиморфна връзка — документът е свързан с клиент ИЛИ заявка
+  // Само едното от двете ще е попълнено
+  clientId          String?
+  client            Client?         @relation(fields: [clientId], references: [id])
+
+  loanApplicationId String?
+  loanApplication   LoanApplication? @relation(fields: [loanApplicationId], references: [id])
+
+  uploadedByUserId  String
+
+  @@index([clientId])
+  @@index([loanApplicationId])
+}
+
+enum SecureLinkPurpose {
+  CLIENT_DATA_FILL      // Клиентът попълва лични и финансови данни
+  OFFER_REVIEW          // Клиентът преглежда оферти
+  DOCUMENT_UPLOAD       // Клиентът качва документи
+  GDPR_CONSENT          // Клиентът потвърждава GDPR съгласие
+}
+
+enum SecureLinkStatus {
+  ACTIVE                // Активен, все още не е използван или е в процес
+  USED                  // Използван — клиентът е попълнил/прегледал
+  EXPIRED               // Изтекъл без използване
+  REVOKED               // Отменен ръчно от консултанта
+}
+
+// =============================================================================
+// SECURE LINKS
+// =============================================================================
+
+/// Защитен еднократен линк, изпратен на клиент или съдлъжник
+/// Не изисква регистрация — достъпен само с токена в URL-а
+model SecureLink {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  // Уникален токен, вграден в URL-а (напр. /secure/abc123xyz)
+  // Генерира се с crypto.randomBytes(32) — не е предвидим
+  token             String          @unique @default(uuid())
+
+  loanApplicationId String
+  loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
+
+  // Кой е изпратил линка
+  createdByUserId   String
+  createdBy         User            @relation("CreatedSecureLinks", fields: [createdByUserId], references: [id])
+
+  // За кого е линкът (клиент или съдлъжник)
+  // Само едното ще е попълнено
+  clientId          String?
+  client            Client?         @relation(fields: [clientId], references: [id])
+
+  familyMemberId    String?
+  familyMember      FamilyMember?   @relation(fields: [familyMemberId], references: [id])
+
+  purpose           SecureLinkPurpose
+  status            SecureLinkStatus  @default(ACTIVE)
+
+  expiresAt         DateTime                            // Линкът изтича след X часа/дни
+  usedAt            DateTime?                           // Кога е бил използван
+
+  @@index([token])
+  @@index([loanApplicationId])
+  @@index([clientId])
+}
+
+// =============================================================================
+// ОДИТЕН ЛОГ
+// =============================================================================
+
+/// Пълна история на всички действия в системата
+/// Попълва се автоматично от NestJS Interceptor — никога ръчно
+model AuditLog {
+  id          String      @id @default(uuid())
+  createdAt   DateTime    @default(now())
+
+  userId      String
+  user        User        @relation(fields: [userId], references: [id])
+
+  action      AuditAction
+
+  // Засегнат обект
+  entityType  String                                    // "LoanApplication", "Client" и т.н.
+  entityId    String                                    // ID на обекта
+
+  // Опционална директна връзка към заявка (за лесно филтриране)
+  loanApplicationId String?
+  loanApplication   LoanApplication? @relation(fields: [loanApplicationId], references: [id])
+
+  // Snapshot на промяната
+  // Пазим само oldState — newState се реконструира от следващия лог запис
+  oldState    Json?                                     // Старото състояние преди промяната
+  metadata    Json?                                     // Допълнителен контекст (IP, device и т.н.)
+
+  @@index([userId])
+  @@index([loanApplicationId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
