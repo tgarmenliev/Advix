@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -8,12 +9,14 @@ import {
   Client,
   LoanApplication,
   LoanStatus,
+  LoanType,
   Prisma,
   UserRole,
 } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../database/prisma.service';
 import { CreateLoanApplicationDto } from './dto/create-loan-application.dto';
+import { LinkPropertyDto } from './dto/link-property.dto';
 import { ListLoanApplicationsQueryDto } from './dto/list-loan-applications-query.dto';
 import { TransitionDto } from './dto/transition.dto';
 import { UpdateLoanApplicationDto } from './dto/update-loan-application.dto';
@@ -183,6 +186,200 @@ export class LoanApplicationsService {
       }),
     ]);
     return updated;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Свързани лица по заявката (junction LoanApplicationFamilyMember)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Включва свързано лице в заявката. Лицето ТРЯБВА да принадлежи на клиента
+   * на заявката — не може съдлъжник на друг клиент да влезе в чуждо досие.
+   */
+  async addFamilyMember(applicationId: string, familyMemberId: string) {
+    const application = await this.db.loanApplication.findUnique({
+      where: { id: applicationId },
+    });
+    if (!application) {
+      throw new NotFoundException('Loan application not found');
+    }
+
+    const member = await this.db.familyMember.findFirst({
+      where: { id: familyMemberId, deletedAt: null },
+    });
+    if (!member) {
+      throw new NotFoundException('Family member not found');
+    }
+
+    if (member.clientId !== application.clientId) {
+      throw new BadRequestException(
+        'Family member belongs to a different client than this application',
+      );
+    }
+
+    const existing = await this.db.loanApplicationFamilyMember.findUnique({
+      where: {
+        loanApplicationId_familyMemberId: {
+          loanApplicationId: applicationId,
+          familyMemberId,
+        },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'Family member is already included in this application',
+      );
+    }
+
+    return this.db.loanApplicationFamilyMember.create({
+      data: { loanApplicationId: applicationId, familyMemberId },
+      include: { familyMember: true },
+    });
+  }
+
+  async removeFamilyMember(applicationId: string, familyMemberId: string) {
+    const link = await this.db.loanApplicationFamilyMember.findUnique({
+      where: {
+        loanApplicationId_familyMemberId: {
+          loanApplicationId: applicationId,
+          familyMemberId,
+        },
+      },
+    });
+    if (!link) {
+      throw new NotFoundException(
+        'Family member is not included in this application',
+      );
+    }
+    await this.db.loanApplicationFamilyMember.delete({
+      where: {
+        loanApplicationId_familyMemberId: {
+          loanApplicationId: applicationId,
+          familyMemberId,
+        },
+      },
+    });
+    return { loanApplicationId: applicationId, familyMemberId, removed: true };
+  }
+
+  async listFamilyMembers(applicationId: string) {
+    const application = await this.db.loanApplication.findUnique({
+      where: { id: applicationId },
+    });
+    if (!application) {
+      throw new NotFoundException('Loan application not found');
+    }
+    const links = await this.db.loanApplicationFamilyMember.findMany({
+      where: {
+        loanApplicationId: applicationId,
+        familyMember: { deletedAt: null },
+      },
+      include: { familyMember: true },
+      orderBy: { assignedAt: 'asc' },
+    });
+    return links.map((link) => ({
+      assignedAt: link.assignedAt,
+      ...link.familyMember,
+    }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Имоти по заявката (junction LoanApplicationProperty)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Свързва имот към заявка. Junction записът пази marketValue и mortgageBankId —
+   * те са специфични за връзката, не за самия имот.
+   *
+   * Мека валидация по тип кредит: при CONSUMER имотът е необичаен → warning в
+   * отговора, без блокиране (бизнес кредит може да ползва имот като обезпечение).
+   */
+  async linkProperty(applicationId: string, dto: LinkPropertyDto) {
+    const application = await this.db.loanApplication.findUnique({
+      where: { id: applicationId },
+    });
+    if (!application) {
+      throw new NotFoundException('Loan application not found');
+    }
+
+    const property = await this.db.property.findUnique({
+      where: { id: dto.propertyId },
+    });
+    if (!property) {
+      throw new NotFoundException('Property not found');
+    }
+
+    if (dto.mortgageBankId) {
+      const bank = await this.db.bank.findUnique({
+        where: { id: dto.mortgageBankId },
+      });
+      if (!bank) {
+        throw new BadRequestException('Mortgage bank not found');
+      }
+    }
+
+    const existing = await this.db.loanApplicationProperty.findUnique({
+      where: {
+        loanApplicationId_propertyId: {
+          loanApplicationId: applicationId,
+          propertyId: dto.propertyId,
+        },
+      },
+    });
+    if (existing) {
+      throw new ConflictException(
+        'Property is already linked to this application',
+      );
+    }
+
+    const link = await this.db.loanApplicationProperty.create({
+      data: {
+        loanApplicationId: applicationId,
+        propertyId: dto.propertyId,
+        marketValue: dto.marketValue,
+        mortgageBankId: dto.mortgageBankId,
+      },
+      include: { property: true },
+    });
+
+    const warning =
+      application.loanType === LoanType.CONSUMER
+        ? 'Property linked to a CONSUMER loan — properties are typically used for mortgage or business collateral'
+        : undefined;
+
+    return warning ? { ...link, warning } : link;
+  }
+
+  async unlinkProperty(applicationId: string, propertyId: string) {
+    const link = await this.db.loanApplicationProperty.findUnique({
+      where: {
+        loanApplicationId_propertyId: {
+          loanApplicationId: applicationId,
+          propertyId,
+        },
+      },
+    });
+    if (!link) {
+      throw new NotFoundException(
+        'Property is not linked to this application',
+      );
+    }
+    await this.db.loanApplicationProperty.delete({ where: { id: link.id } });
+    return { loanApplicationId: applicationId, propertyId, removed: true };
+  }
+
+  async listProperties(applicationId: string) {
+    const application = await this.db.loanApplication.findUnique({
+      where: { id: applicationId },
+    });
+    if (!application) {
+      throw new NotFoundException('Loan application not found');
+    }
+    return this.db.loanApplicationProperty.findMany({
+      where: { loanApplicationId: applicationId },
+      include: { property: true },
+      orderBy: { assignedAt: 'asc' },
+    });
   }
 
   /** Права по роля (MASTER_CONTEXT §2 и §5). */
