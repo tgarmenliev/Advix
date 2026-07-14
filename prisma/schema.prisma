@@ -250,6 +250,9 @@ model FamilyMember {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  // Soft delete — свързаното лице има лични/финансови данни, не се трие физически
+  deletedAt   DateTime?
+
   clientId    String
   client      Client   @relation(fields: [clientId], references: [id])
 
@@ -269,9 +272,9 @@ model FamilyMember {
   contractType      ContractType?
   netSalary         Int?    
 
-  // Текущи задължения (без рефинансиране)
-  existingLoansTotal        Float?  
-  existingLoansMonthlyTotal Float?  
+  // Текущи задължения (без рефинансиране) — Int в стотинки (MASTER_CONTEXT §7)
+  existingLoansTotal        Int?
+  existingLoansMonthlyTotal Int?
 
   // GDPR — съдлъжникът също дава лични данни, нужно е отделно съгласие
   gdprConsentAt     DateTime?                           // Дата и час на дадено съгласие
@@ -418,8 +421,8 @@ model LoanApplicationProperty {
   mortgageBankId    String?
   mortgageBank      Bank?           @relation("MortgageBank", fields: [mortgageBankId], references: [id])
 
-  // Пазарна цена (при бизнес обезпечение)
-  marketValue       Float?
+  // Пазарна цена (при бизнес обезпечение) — Int в стотинки (MASTER_CONTEXT §7)
+  marketValue       Int?
 
   assignedAt        DateTime        @default(now())
 
