@@ -9,6 +9,7 @@ import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { ClientsModule } from './clients/clients.module';
+import { FamilyMembersModule } from './family-members/family-members.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import {
@@ -20,6 +21,7 @@ import { validationSchema } from './config/validation.schema';
 import { DatabaseModule } from './database/database.module';
 import { HealthController } from './health/health.controller';
 import { LoanApplicationsModule } from './loan-applications/loan-applications.module';
+import { PropertiesModule } from './properties/properties.module';
 import { TenantsModule } from './tenants/tenants.module';
 
 @Module({
@@ -35,7 +37,9 @@ import { TenantsModule } from './tenants/tenants.module';
     AuthModule,
     TenantsModule,
     ClientsModule,
+    FamilyMembersModule,
     LoanApplicationsModule,
+    PropertiesModule,
   ],
   controllers: [HealthController],
   providers: [
