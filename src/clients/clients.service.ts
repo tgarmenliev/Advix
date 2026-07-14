@@ -72,7 +72,7 @@ export class ClientsService {
     const client = await this.db.client.findFirst({
       where: { id, deletedAt: null },
       include: {
-        familyMembers: true,
+        familyMembers: { where: { deletedAt: null } },
         loanApplications: {
           orderBy: { createdAt: 'desc' },
         },
