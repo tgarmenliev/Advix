@@ -66,6 +66,8 @@ describe('LoanApplicationsService', () => {
   const makeApplication = (overrides: Record<string, unknown> = {}) => ({
     id: 'app-1',
     clientId: 'client-1',
+    consultantId: 'consultant-1', // собственост на тестовия консултант
+    partnerId: null,
     status: LoanStatus.INTERNAL_PROCESSING,
     amount: 5000000,
     termMonths: 240,

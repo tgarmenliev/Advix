@@ -1,18 +1,10 @@
-import { LoanType } from '@prisma/client';
-import {
-  IsEnum,
-  IsInt,
-  IsOptional,
-  IsString,
-  Min,
-} from 'class-validator';
+import { IsInt, IsOptional, IsString, Min } from 'class-validator';
 
-/** Редакция само на базови полета — статусът се сменя през /transition. */
+/**
+ * Редакция само на базови полета. Статусът се сменя през /transition,
+ * а loanType — само от ADMIN през /change-type (рядък краен случай).
+ */
 export class UpdateLoanApplicationDto {
-  @IsOptional()
-  @IsEnum(LoanType)
-  loanType?: LoanType;
-
   @IsOptional()
   @IsInt()
   @Min(1)

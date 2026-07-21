@@ -14,12 +14,15 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
 import { AddFamilyMemberDto } from './dto/add-family-member.dto';
+import { AssignConsultantDto } from './dto/assign-consultant.dto';
+import { ChangeLoanTypeDto } from './dto/change-loan-type.dto';
 import { CreateLoanApplicationDto } from './dto/create-loan-application.dto';
+import { FlipBorrowerDto } from './dto/flip-borrower.dto';
 import { LinkPropertyDto } from './dto/link-property.dto';
-import { FinancialCalculationService } from './financial/financial-calculation.service';
 import { ListLoanApplicationsQueryDto } from './dto/list-loan-applications-query.dto';
 import { TransitionDto } from './dto/transition.dto';
 import { UpdateLoanApplicationDto } from './dto/update-loan-application.dto';
+import { FinancialCalculationService } from './financial/financial-calculation.service';
 import { LoanApplicationsService } from './loan-applications.service';
 
 @Roles(
@@ -45,21 +48,74 @@ export class LoanApplicationsController {
   }
 
   @Get()
-  findAll(@Query() query: ListLoanApplicationsQueryDto) {
-    return this.loanApplicationsService.findAll(query);
+  findAll(
+    @Query() query: ListLoanApplicationsQueryDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.findAll(query, user);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.loanApplicationsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.findOne(id, user);
   }
 
   @Patch(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateLoanApplicationDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.loanApplicationsService.update(id, dto);
+    return this.loanApplicationsService.update(id, dto, user);
+  }
+
+  // Назначаване/прехвърляне на консултант — само ADMIN
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/assign')
+  assign(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignConsultantDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.assignConsultant(
+      id,
+      dto.consultantId,
+      user,
+    );
+  }
+
+  // Смяна на типа на кредита — рядък краен случай, само ADMIN
+  @Roles(UserRole.ADMIN)
+  @Patch(':id/change-type')
+  changeType(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChangeLoanTypeDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.changeLoanType(id, dto.loanType, user);
+  }
+
+  // Размяна основен клиент ↔ съдлъжник (PARTNER_A не участва)
+  @Roles(
+    UserRole.ADMIN,
+    UserRole.CONSULTANT,
+    UserRole.PARTNER_B,
+    UserRole.PARTNER_C,
+  )
+  @Post(':id/flip-borrower')
+  flipBorrower(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FlipBorrowerDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.flipBorrower(
+      id,
+      dto.familyMemberId,
+      user,
+    );
   }
 
   @Post(':id/transition')
@@ -77,26 +133,33 @@ export class LoanApplicationsController {
   addFamilyMember(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AddFamilyMemberDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.loanApplicationsService.addFamilyMember(
       id,
       dto.familyMemberId,
+      user,
     );
   }
 
   @Get(':id/family-members')
-  listFamilyMembers(@Param('id', ParseUUIDPipe) id: string) {
-    return this.loanApplicationsService.listFamilyMembers(id);
+  listFamilyMembers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.listFamilyMembers(id, user);
   }
 
   @Delete(':id/family-members/:familyMemberId')
   removeFamilyMember(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('familyMemberId', ParseUUIDPipe) familyMemberId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
     return this.loanApplicationsService.removeFamilyMember(
       id,
       familyMemberId,
+      user,
     );
   }
 
@@ -106,21 +169,26 @@ export class LoanApplicationsController {
   linkProperty(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: LinkPropertyDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.loanApplicationsService.linkProperty(id, dto);
+    return this.loanApplicationsService.linkProperty(id, dto, user);
   }
 
   @Get(':id/properties')
-  listProperties(@Param('id', ParseUUIDPipe) id: string) {
-    return this.loanApplicationsService.listProperties(id);
+  listProperties(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.loanApplicationsService.listProperties(id, user);
   }
 
   @Delete(':id/properties/:propertyId')
   unlinkProperty(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('propertyId', ParseUUIDPipe) propertyId: string,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
-    return this.loanApplicationsService.unlinkProperty(id, propertyId);
+    return this.loanApplicationsService.unlinkProperty(id, propertyId, user);
   }
 
   // --- Финансово резюме (само информативно — не взема кредитни решения) ---
@@ -133,7 +201,11 @@ export class LoanApplicationsController {
     UserRole.PARTNER_C,
   )
   @Get(':id/financial-summary')
-  financialSummary(@Param('id', ParseUUIDPipe) id: string) {
+  async financialSummary(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    await this.loanApplicationsService.assertAccessById(id, user);
     return this.financialCalculationService.getFinancialSummary(id);
   }
 }

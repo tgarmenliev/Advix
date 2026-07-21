@@ -17,11 +17,14 @@ export class CreateLoanApplicationDto {
 
   @IsInt()
   @Min(1)
-  amount!: number; // стотинки
+  amount!: number; // цели евроцентове/стотинки
 
+  // Хлабав запис: срокът е опционален при създаване; става задължителен преди
+  // преход към READY_FOR_BANK (валидира се в workflow-а)
+  @IsOptional()
   @IsInt()
   @Min(1)
-  termMonths!: number;
+  termMonths?: number;
 
   @IsOptional()
   @IsString()
