@@ -23,6 +23,7 @@ import { HealthController } from './health/health.controller';
 import { LoanApplicationsModule } from './loan-applications/loan-applications.module';
 import { PropertiesModule } from './properties/properties.module';
 import { TenantsModule } from './tenants/tenants.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { TenantsModule } from './tenants/tenants.module';
     FamilyMembersModule,
     LoanApplicationsModule,
     PropertiesModule,
+    UsersModule,
   ],
   controllers: [HealthController],
   providers: [
