@@ -157,6 +157,7 @@ model User {
   firstName     String
   lastName      String
   phone         String?
+  city          String?                       // Град на консултанта — за филтриране на банкови контакти
   role          UserRole
 
   isActive      Boolean   @default(true)
@@ -319,16 +320,19 @@ model LoanApplication {
   clientId      String
   client        Client      @relation(fields: [clientId], references: [id])
 
-  consultantId  String
-  consultant    User        @relation("AssignedConsultant", fields: [consultantId], references: [id])
+  // Опционален: лийд от PARTNER_A още няма назначен консултант —
+  // ADMIN го назначава по-късно (виж /loan-applications/:id/assign)
+  consultantId  String?
+  consultant    User?       @relation("AssignedConsultant", fields: [consultantId], references: [id])
 
   partnerId     String?
   partner       User?       @relation("PartnerOnApplication", fields: [partnerId], references: [id])
 
   // Параметри на кредита
   loanType      LoanType
-  amount        Int                 // Желан размер в евро
-  termMonths    Int                                       // Желан срок в месеци
+  amount        Int                 // Желан размер в евро (цели евроцентове/стотинки)
+  // Опционален при създаване (хлабав запис); задължителен преди READY_FOR_BANK
+  termMonths    Int?                                      // Желан срок в месеци
   purpose       String?                                  // Цел на кредита
 
   // Статус
