@@ -10,6 +10,7 @@ import {
   LoanApplication,
   LoanStatus,
   LoanType,
+  OfferStatus,
   Prisma,
   RelatedPersonRole,
   UserRole,
@@ -51,6 +52,20 @@ const FINALIZED_STATUSES: readonly LoanStatus[] = [
   LoanStatus.DISBURSED,
   LoanStatus.COMPLETED,
 ];
+
+/**
+ * Статусът на избраната оферта следва този на заявката. Само за преходите, при
+ * които офертата има съответствие; останалите не пипат офертите.
+ */
+const OFFER_STATUS_BY_APPLICATION_STATUS: Partial<
+  Record<LoanStatus, OfferStatus>
+> = {
+  [LoanStatus.APPLICATION_SUBMITTED]: OfferStatus.APPLICATION_SUBMITTED,
+  [LoanStatus.APPROVED]: OfferStatus.APPROVED,
+  [LoanStatus.DISBURSED]: OfferStatus.DISBURSED,
+  // Банката отказа — офертата отпада и клиентът може да избере друга
+  [LoanStatus.REJECTED_BY_BANK]: OfferStatus.REJECTED,
+};
 
 /** Роли, които могат да пишат във вътрешните бележки (internalNotes). */
 const NOTES_WRITER_ROLES: readonly UserRole[] = [
@@ -322,12 +337,12 @@ export class LoanApplicationsService {
       this.assertReadyForBank(application, application.client);
     }
 
-    const [updated] = await this.db.$transaction([
-      this.db.loanApplication.update({
+    return this.db.$transaction(async (tx) => {
+      const updated = await tx.loanApplication.update({
         where: { id },
         data: { status: dto.toStatus },
-      }),
-      this.db.loanStatusHistory.create({
+      });
+      await tx.loanStatusHistory.create({
         data: {
           loanApplicationId: id,
           fromStatus: application.status,
@@ -335,9 +350,23 @@ export class LoanApplicationsService {
           changedByUserId: currentUser.userId,
           note: dto.note,
         },
-      }),
-    ]);
-    return updated;
+      });
+
+      // Избраната оферта следва статуса на заявката (кандидатстване, одобрение,
+      // отпускане, отказ от банката). Неизбраните (PENDING/REJECTED) не се пипат.
+      const offerStatus = OFFER_STATUS_BY_APPLICATION_STATUS[dto.toStatus];
+      if (offerStatus) {
+        await tx.bankOffer.updateMany({
+          where: {
+            loanApplicationId: id,
+            status: { notIn: [OfferStatus.PENDING, OfferStatus.REJECTED] },
+          },
+          data: { status: offerStatus },
+        });
+      }
+
+      return updated;
+    });
   }
 
   /**
@@ -378,6 +407,81 @@ export class LoanApplicationsService {
           toStatus: LoanStatus.SENT_TO_BANKS,
           changedByUserId: currentUser.userId,
           note: 'Изпратени банкови запитвания',
+        },
+      }),
+    ]);
+    return updated;
+  }
+
+  /**
+   * Извиква се при записване на банкова оферта: придвижва заявката
+   * SENT_TO_BANKS → OFFERS_RECEIVED. Ако заявката вече е по-напред (напр. при
+   * закъсняла оферта), статусът НЕ се връща назад — просто не се пипа.
+   */
+  async markOffersReceived(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<LoanApplication> {
+    const application = await this.loadOwned(id, currentUser);
+    if (
+      FINALIZED_STATUSES.includes(application.status) ||
+      application.status === LoanStatus.REJECTED_BY_CLIENT
+    ) {
+      throw new BadRequestException(
+        'Cannot record offers for a closed application',
+      );
+    }
+    if (application.status !== LoanStatus.SENT_TO_BANKS) {
+      return application;
+    }
+    const [updated] = await this.db.$transaction([
+      this.db.loanApplication.update({
+        where: { id },
+        data: { status: LoanStatus.OFFERS_RECEIVED },
+      }),
+      this.db.loanStatusHistory.create({
+        data: {
+          loanApplicationId: id,
+          fromStatus: application.status,
+          toStatus: LoanStatus.OFFERS_RECEIVED,
+          changedByUserId: currentUser.userId,
+          note: 'Получена банкова оферта',
+        },
+      }),
+    ]);
+    return updated;
+  }
+
+  /**
+   * Извиква се при избор на оферта: OFFERS_RECEIVED → OFFER_SELECTED.
+   * Преизбор (когато заявката вече е OFFER_SELECTED) е позволен и не създава
+   * нов преход.
+   */
+  async markOfferSelected(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<LoanApplication> {
+    const application = await this.loadOwned(id, currentUser);
+    if (application.status === LoanStatus.OFFER_SELECTED) {
+      return application;
+    }
+    if (application.status !== LoanStatus.OFFERS_RECEIVED) {
+      throw new BadRequestException(
+        `Cannot select an offer from status ${application.status}`,
+      );
+    }
+    const [updated] = await this.db.$transaction([
+      this.db.loanApplication.update({
+        where: { id },
+        data: { status: LoanStatus.OFFER_SELECTED },
+      }),
+      this.db.loanStatusHistory.create({
+        data: {
+          loanApplicationId: id,
+          fromStatus: application.status,
+          toStatus: LoanStatus.OFFER_SELECTED,
+          changedByUserId: currentUser.userId,
+          note: 'Избрана оферта',
         },
       }),
     ]);
