@@ -481,7 +481,7 @@ model BankContact {
   lastName  String
   email     String
   phone     String?
-  city      String?
+  city      String                                // Локация на служителя (задължителна — за филтъра по град)
 
   // Запитвания изпратени към този контакт
   inquiries BankInquiry[]
