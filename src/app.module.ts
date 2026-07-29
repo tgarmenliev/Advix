@@ -9,6 +9,7 @@ import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { BankInquiriesModule } from './bank-inquiries/bank-inquiries.module';
+import { BankOffersModule } from './bank-offers/bank-offers.module';
 import { BanksModule } from './banks/banks.module';
 import { ClientsModule } from './clients/clients.module';
 import { FamilyMembersModule } from './family-members/family-members.module';
@@ -48,6 +49,7 @@ import { UsersModule } from './users/users.module';
     BanksModule,
     InquiryTemplatesModule,
     BankInquiriesModule,
+    BankOffersModule,
   ],
   controllers: [HealthController],
   providers: [
