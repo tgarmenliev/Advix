@@ -340,6 +340,50 @@ export class LoanApplicationsService {
     return updated;
   }
 
+  /**
+   * Придвижва заявката към SENT_TO_BANKS при изпращане на банкови запитвания.
+   * Прилага правилата по роля за изпращане към банки (PARTNER_A не може;
+   * PARTNER_B изисква одобрение от ADMIN) и записва прехода в историята.
+   * Ако вече е SENT_TO_BANKS → добавяме още запитвания без нов преход.
+   * Извиква се от банковия модул (BankInquiriesService).
+   */
+  async markSentToBanks(
+    id: string,
+    currentUser: AuthenticatedUser,
+  ): Promise<LoanApplication> {
+    this.assertRoleCanTransition(currentUser, LoanStatus.SENT_TO_BANKS);
+    const application = await this.loadOwned(id, currentUser);
+
+    if (application.status === LoanStatus.SENT_TO_BANKS) {
+      return application;
+    }
+    if (
+      application.status !== LoanStatus.READY_FOR_BANK &&
+      application.status !== LoanStatus.REJECTED_BY_BANK
+    ) {
+      throw new BadRequestException(
+        `Cannot send to banks from status ${application.status}`,
+      );
+    }
+
+    const [updated] = await this.db.$transaction([
+      this.db.loanApplication.update({
+        where: { id },
+        data: { status: LoanStatus.SENT_TO_BANKS },
+      }),
+      this.db.loanStatusHistory.create({
+        data: {
+          loanApplicationId: id,
+          fromStatus: application.status,
+          toStatus: LoanStatus.SENT_TO_BANKS,
+          changedByUserId: currentUser.userId,
+          note: 'Изпратени банкови запитвания',
+        },
+      }),
+    ]);
+    return updated;
+  }
+
   // ---------------------------------------------------------------------------
   // Свързани лица по заявката (junction LoanApplicationFamilyMember)
   // ---------------------------------------------------------------------------
