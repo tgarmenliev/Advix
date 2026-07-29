@@ -18,8 +18,12 @@ export interface AppConfig {
     endpoint: string;
   };
   email: {
+    provider: string;
     apiKey: string;
     from: string;
+    // Безопасен режим: НЕ праща реални имейли (само логва). По подразбиране е
+    // включен; изключва се само с EMAIL_DRY_RUN=false И реален ключ.
+    dryRun: boolean;
   };
 }
 
@@ -44,7 +48,9 @@ export default (): AppConfig => ({
     endpoint: process.env.SCW_ENDPOINT ?? '',
   },
   email: {
+    provider: process.env.EMAIL_PROVIDER ?? 'resend',
     apiKey: process.env.EMAIL_API_KEY ?? '',
     from: process.env.EMAIL_FROM ?? '',
+    dryRun: process.env.EMAIL_DRY_RUN !== 'false',
   },
 });
