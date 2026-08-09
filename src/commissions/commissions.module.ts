@@ -5,6 +5,7 @@ import { LoanApplicationsModule } from '../loan-applications/loan-applications.m
 import { CommissionCalculationService } from './commission-calculation.service';
 import { CommissionsController } from './commissions.controller';
 import { CommissionsService } from './commissions.service';
+import { PartnerCommissionService } from './partner-commission.service';
 
 @Module({
   imports: [
@@ -13,7 +14,15 @@ import { CommissionsService } from './commissions.service';
     LoanApplicationsModule,
   ],
   controllers: [CommissionsController],
-  providers: [CommissionsService, CommissionCalculationService],
-  exports: [CommissionsService, CommissionCalculationService],
+  providers: [
+    CommissionsService,
+    CommissionCalculationService,
+    PartnerCommissionService,
+  ],
+  exports: [
+    CommissionsService,
+    CommissionCalculationService,
+    PartnerCommissionService,
+  ],
 })
 export class CommissionsModule {}

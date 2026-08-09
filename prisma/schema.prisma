@@ -127,8 +127,18 @@ enum CommissionBasis {
 }
 
 enum PartnerCommissionStatus {
-  PENDING               // Очаква плащане
-  PAID                  // Платена
+  PROPOSED              // Предложена, чака одобрение от ADMIN
+  APPROVED              // Одобрена, чака плащане
+  PAID                  // Изплатена
+  REJECTED              // Отхвърлена от ADMIN
+}
+
+/// Трите начина, по които се договаря делът на партньора.
+/// Уговаря се индивидуално за всяка сделка, не следва от буквата А/Б/В.
+enum PartnerCommissionModel {
+  FIXED                 // Фиксирана сума
+  PERCENT_OF_LOAN       // Процент от отпуснатата сума
+  PERCENT_OF_COMMISSION // Процент от получената от банката комисиона
 }
 
 enum DocumentType {
@@ -736,11 +746,22 @@ model CommissionRecord {
   // Финансов резултат
   netRevenue        Int?         // Нетен приход за посредника
 
-  // Комисиона към партньор (ако има)
-  partnerCommissionPercent Int?   // Процент
-  partnerCommissionFixed   Int?  // Фиксирана сума
-  partnerCommissionPaidAt  DateTime?
+  // --- Комисиона към партньор (ако има) ---
+  //
+  // Партньорът (или консултантът) предлага, ADMIN одобрява. Уговорката е
+  // индивидуална за сделката; партньорът се пази отделно от заявката, за да
+  // остане одобреното непроменено, дори по-късно заявката да смени партньор.
+  partnerId                String?
+  partnerCommissionModel   PartnerCommissionModel?
+  partnerCommissionPercent Float?                     // 0.2 = 20%
+  partnerCommissionFixed   Int?                       // стотинки
+  /// Изчислената дължима сума (стотинки) — пази се при одобрение
+  partnerCommissionAmount  Int?
   partnerCommissionStatus  PartnerCommissionStatus?
+  partnerCommissionProposedById String?
+  partnerCommissionApprovedById String?
+  partnerCommissionApprovedAt   DateTime?
+  partnerCommissionPaidAt  DateTime?
 
   // Комисиони по траншове
   trancheCommissions TrancheCommission[]
