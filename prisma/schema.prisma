@@ -92,6 +92,40 @@ enum CommissionStatus {
   RECEIVED              // Получена
 }
 
+/// Комисионата и бонусът работят по една и съща механика, но се конфигурират
+/// отделно — една банка може да има различен модел за двете
+enum CommissionSchemeType {
+  COMMISSION            // Комисиона
+  BONUS                 // Бонус
+}
+
+/// Единственото разделение по тип кредит, което банките правят при комисионите
+enum CommissionLoanCategory {
+  MORTGAGE              // Ипотечен (със и без покупка)
+  CONSUMER              // Потребителски
+}
+
+/// Периодите са КАЛЕНДАРНО подравнени (тримесечие = яну–мар, апр–юни...)
+enum CommissionPeriodType {
+  MONTHLY               // Месец
+  QUARTERLY             // Тримесечие
+  SEMI_ANNUAL           // Полугодие
+  ANNUAL                // Година
+}
+
+enum CommissionEvaluationMode {
+  /// Отчита се всеки месец; при скок в по-горна скала банката доплаща
+  /// разликата за вече отчетените месеци; в края на периода се нулира
+  PROGRESSIVE_RETROACTIVE
+  /// Гледа се само общият обем в края на периода
+  END_OF_PERIOD
+}
+
+enum CommissionBasis {
+  FLAT_PERCENT          // Фиксиран процент, независим от обема
+  VOLUME_TIERED         // Процентът зависи от обема за периода
+}
+
 enum PartnerCommissionStatus {
   PENDING               // Очаква плащане
   PAID                  // Платена
@@ -459,6 +493,63 @@ model Bank {
   inquiries       BankInquiry[]
   offers          BankOffer[]
   mortgages       LoanApplicationProperty[] @relation("MortgageBank")
+  commissionSchemes CommissionScheme[]
+}
+
+/// Схема за комисиона или бонус от конкретна банка.
+///
+/// Конфигурира се за комбинацията банка × тип кредит × вид (комисиона/бонус).
+/// Условията се менят във времето, затова схемите имат валидност от–до —
+/// старите изчисления остават каквито са били, а новите ползват новата схема.
+model CommissionScheme {
+  id              String    @id @default(uuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  bankId          String
+  bank            Bank      @relation(fields: [bankId], references: [id])
+
+  schemeType      CommissionSchemeType
+  loanCategory    CommissionLoanCategory
+
+  // Валидност — не може две схеми за един и същ ключ да се застъпват във времето
+  validFrom       DateTime
+  validTo         DateTime?                             // null = безсрочна
+
+  basis           CommissionBasis @default(FLAT_PERCENT)
+
+  // При FLAT_PERCENT
+  flatPercent     Float?                                // 0.01 = 1.00%
+
+  // При VOLUME_TIERED
+  periodType      CommissionPeriodType?
+  evaluationMode  CommissionEvaluationMode?
+
+  /// Таван на комисионата за ЕДНА сделка (стотинки)
+  maxPerDealAmount Int?
+
+  notes           String?
+
+  tiers           CommissionTier[]
+
+  @@index([bankId])
+  @@index([bankId, schemeType, loanCategory])
+}
+
+/// Скала по обем в рамките на схема.
+/// Достигнатата скала се прилага върху ЦЕЛИЯ обем за периода (затова при
+/// прогресивния режим банката доплаща разликата за вече отчетените месеци).
+model CommissionTier {
+  id          String            @id @default(uuid())
+
+  schemeId    String
+  scheme      CommissionScheme  @relation(fields: [schemeId], references: [id], onDelete: Cascade)
+
+  minVolume   Int                                       // стотинки, включително
+  maxVolume   Int?                                      // стотинки, изключително; null = без таван
+  percent     Float                                     // 0.01 = 1.00%
+
+  @@index([schemeId])
 }
 
 /// Офис на банката по град

@@ -12,6 +12,7 @@ import { BankInquiriesModule } from './bank-inquiries/bank-inquiries.module';
 import { BankOffersModule } from './bank-offers/bank-offers.module';
 import { BanksModule } from './banks/banks.module';
 import { ClientsModule } from './clients/clients.module';
+import { CommissionSchemesModule } from './commission-schemes/commission-schemes.module';
 import { FamilyMembersModule } from './family-members/family-members.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -50,6 +51,7 @@ import { UsersModule } from './users/users.module';
     InquiryTemplatesModule,
     BankInquiriesModule,
     BankOffersModule,
+    CommissionSchemesModule,
   ],
   controllers: [HealthController],
   providers: [
