@@ -494,6 +494,38 @@ model Bank {
   offers          BankOffer[]
   mortgages       LoanApplicationProperty[] @relation("MortgageBank")
   commissionSchemes CommissionScheme[]
+  periodBonuses   BankPeriodBonus[]
+}
+
+/// Начислен бонус от банка за отчетен период.
+///
+/// За разлика от комисионата, бонусът не се привързва към конкретна сделка —
+/// той се получава заради общия обем за периода. Затова се пази на ниво
+/// период, а не на транш.
+model BankPeriodBonus {
+  id              String    @id @default(uuid())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  bankId          String
+  bank            Bank      @relation(fields: [bankId], references: [id])
+
+  loanCategory    CommissionLoanCategory
+  periodType      CommissionPeriodType
+  periodYear      Int
+  periodIndex     Int
+  periodLabel     String                                // "2026-Q1"
+
+  /// Обемът, върху който е сметнат бонусът (стотинки)
+  volume          Int
+  appliedPercent  Float
+  expectedAmount  Int
+  actualAmount    Int?
+  occurredAt      DateTime?
+  status          CommissionStatus @default(EXPECTED)
+
+  @@unique([bankId, loanCategory, periodType, periodYear, periodIndex])
+  @@index([bankId])
 }
 
 /// Схема за комисиона или бонус от конкретна банка.
