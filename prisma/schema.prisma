@@ -133,6 +133,16 @@ enum PartnerCommissionStatus {
   REJECTED              // Отхвърлена от ADMIN
 }
 
+enum CommissionAdjustmentType {
+  /// Банката си иска обратно вече платена комисиона (напр. предсрочно
+  /// погасяване в началния период). Сумата е отрицателна.
+  CLAWBACK
+  /// Корекция на изчислена сума в двете посоки
+  CORRECTION
+  /// Ръчно доплащане от банката извън обичайното изчисление
+  MANUAL_TOP_UP
+}
+
 /// Трите начина, по които се договаря делът на партньора.
 /// Уговаря се индивидуално за всяка сделка, не следва от буквата А/Б/В.
 enum PartnerCommissionModel {
@@ -398,6 +408,7 @@ model LoanApplication {
   statusHistory     LoanStatusHistory[]
   auditLogs         AuditLog[]
   secureLinks       SecureLink[]
+  commissionAdjustments CommissionAdjustment[]
 
   @@index([clientId])
   @@index([consultantId])
@@ -505,6 +516,39 @@ model Bank {
   mortgages       LoanApplicationProperty[] @relation("MortgageBank")
   commissionSchemes CommissionScheme[]
   periodBonuses   BankPeriodBonus[]
+  adjustments     CommissionAdjustment[]
+}
+
+/// Корекция по комисионите с дадена банка.
+///
+/// Основният случай е clawback: банката приспада вече платена комисиона от
+/// бъдещи плащания (напр. клиентът е погасил предсрочно). Затова корекцията
+/// стои на ниво банка и се „урежда", когато бъде приспадната.
+model CommissionAdjustment {
+  id                String    @id @default(uuid())
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  bankId            String
+  bank              Bank      @relation(fields: [bankId], references: [id])
+
+  /// Ако корекцията е по конкретна сделка (не е задължително)
+  loanApplicationId String?
+  loanApplication   LoanApplication? @relation(fields: [loanApplicationId], references: [id])
+
+  type              CommissionAdjustmentType
+  /// Стотинки; ОТРИЦАТЕЛНА при clawback
+  amount            Int
+  reason            String
+  occurredAt        DateTime
+
+  /// Кога е приспадната/уредена; докато е null, тежи на баланса
+  settledAt         DateTime?
+
+  createdByUserId   String
+
+  @@index([bankId])
+  @@index([loanApplicationId])
 }
 
 /// Начислен бонус от банка за отчетен период.

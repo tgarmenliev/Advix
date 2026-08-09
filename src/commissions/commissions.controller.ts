@@ -13,10 +13,15 @@ import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { LoanApplicationsService } from '../loan-applications/loan-applications.service';
+import { periodByIndex } from '../commission-schemes/period.util';
+import { CommissionAdjustmentsService } from './commission-adjustments.service';
+import { CommissionReportsService } from './commission-reports.service';
 import { CommissionsService } from './commissions.service';
 import { PartnerCommissionService } from './partner-commission.service';
+import { CreateAdjustmentDto } from './dto/create-adjustment.dto';
 import { PeriodQueryDto } from './dto/period-query.dto';
 import { ProposePartnerCommissionDto } from './dto/propose-partner-commission.dto';
+import { ReportQueryDto } from './dto/report-query.dto';
 import { UpdateCommissionStatusDto } from './dto/update-commission-status.dto';
 
 @Controller()
@@ -24,8 +29,17 @@ export class CommissionsController {
   constructor(
     private readonly commissionsService: CommissionsService,
     private readonly partnerCommissionService: PartnerCommissionService,
+    private readonly adjustmentsService: CommissionAdjustmentsService,
+    private readonly reportsService: CommissionReportsService,
     private readonly loanApplicationsService: LoanApplicationsService,
   ) {}
+
+  /** Периодът за справка — само ако и трите параметъра са подадени */
+  private periodFrom(query: ReportQueryDto) {
+    return query.periodType && query.year && query.index
+      ? periodByIndex(query.periodType, query.year, query.index)
+      : undefined;
+  }
 
   /** Преглед без запис — колко излиза за периода при текущите данни */
   @Roles(UserRole.ADMIN)
@@ -164,5 +178,65 @@ export class CommissionsController {
   @Patch('loan-applications/:id/partner-commission/recalculate')
   recalculatePartnerCommission(@Param('id', ParseUUIDPipe) id: string) {
     return this.partnerCommissionService.recalculate(id);
+  }
+
+  // --- Корекции и clawback ---
+
+  @Roles(UserRole.ADMIN)
+  @Post('banks/:bankId/commission-adjustments')
+  createAdjustment(
+    @Param('bankId', ParseUUIDPipe) bankId: string,
+    @Body() dto: CreateAdjustmentDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    return this.adjustmentsService.create(bankId, dto, user);
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Get('banks/:bankId/commission-adjustments')
+  listAdjustments(
+    @Param('bankId', ParseUUIDPipe) bankId: string,
+    @Query('outstanding') outstanding?: string,
+  ) {
+    return this.adjustmentsService.findAllForBank(
+      bankId,
+      outstanding === 'true',
+    );
+  }
+
+  /** Отбелязва корекцията като приспадната от плащане */
+  @Roles(UserRole.ADMIN)
+  @Patch('commission-adjustments/:id/settle')
+  settleAdjustment(@Param('id', ParseUUIDPipe) id: string) {
+    return this.adjustmentsService.settle(id);
+  }
+
+  // --- Справки ---
+
+  /** Общ преглед по банки: очаквано, получено, корекции, нетен приход */
+  @Roles(UserRole.ADMIN)
+  @Get('commissions/report')
+  portfolioReport(@Query() query: ReportQueryDto) {
+    return this.reportsService.portfolio(this.periodFrom(query));
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Get('banks/:bankId/commissions/report')
+  bankReport(
+    @Param('bankId', ParseUUIDPipe) bankId: string,
+    @Query() query: ReportQueryDto,
+  ) {
+    return this.reportsService.bankSummary(
+      bankId,
+      undefined,
+      this.periodFrom(query),
+    );
+  }
+
+  /** Кой партньор колко чака да получи и колко вече е взел */
+  @Roles(UserRole.ADMIN)
+  @Get('commissions/report/partners')
+  partnerReport() {
+    return this.reportsService.byPartner();
   }
 }
