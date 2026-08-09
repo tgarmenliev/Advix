@@ -23,6 +23,7 @@ import {
 import configuration from './config/configuration';
 import { validationSchema } from './config/validation.schema';
 import { DatabaseModule } from './database/database.module';
+import { DisbursementsModule } from './disbursements/disbursements.module';
 import { HealthController } from './health/health.controller';
 import { InquiryTemplatesModule } from './inquiry-templates/inquiry-templates.module';
 import { LoanApplicationsModule } from './loan-applications/loan-applications.module';
@@ -52,6 +53,7 @@ import { UsersModule } from './users/users.module';
     BankInquiriesModule,
     BankOffersModule,
     CommissionSchemesModule,
+    DisbursementsModule,
   ],
   controllers: [HealthController],
   providers: [

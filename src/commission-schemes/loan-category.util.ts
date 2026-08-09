@@ -20,3 +20,12 @@ export function loanTypeToCommissionCategory(
       return CommissionLoanCategory.CONSUMER;
   }
 }
+
+/** Обратното мапване — кои типове заявки влизат в дадена категория. */
+export function commissionCategoryToLoanTypes(
+  category: CommissionLoanCategory,
+): LoanType[] {
+  return Object.values(LoanType).filter(
+    (loanType) => loanTypeToCommissionCategory(loanType) === category,
+  );
+}
