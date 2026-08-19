@@ -17,7 +17,8 @@ describe('CommissionAdjustmentsService', () => {
   };
   const bank = { findUnique: jest.fn() };
   const loanApplication = { findUnique: jest.fn() };
-  const db = { commissionAdjustment, bank, loanApplication };
+  const bankPeriodBonus = { findUnique: jest.fn() };
+  const db = { commissionAdjustment, bank, loanApplication, bankPeriodBonus };
   const prismaMock = {
     get tenantDb() {
       return db;
@@ -132,6 +133,56 @@ describe('CommissionAdjustmentsService', () => {
         service.create(
           'bank-1',
           { ...baseDto, loanApplicationId: 'няма-такава' },
+          admin,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  /**
+   * Случаят "импостер банка": clawback по получен ПЕРИОДЕН БОНУС, не по
+   * конкретна сделка (напр. банка, връщаща тримесечния бонус при предсрочно
+   * погасяване в 1-та година).
+   */
+  describe('create — clawback по bankPeriodBonusId', () => {
+    it('приема корекция, свързана с периоден бонус', async () => {
+      bankPeriodBonus.findUnique.mockResolvedValue({
+        id: 'bonus-1',
+        bankId: 'bank-1',
+      });
+
+      const result = await service.create(
+        'bank-1',
+        { ...baseDto, bankPeriodBonusId: 'bonus-1' },
+        admin,
+      );
+
+      expect(commissionAdjustment.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ bankPeriodBonusId: 'bonus-1' }),
+      });
+      expect(result.bankPeriodBonusId).toBe('bonus-1');
+    });
+
+    it('несъществуващ бонус → 400', async () => {
+      bankPeriodBonus.findUnique.mockResolvedValue(null);
+      await expect(
+        service.create(
+          'bank-1',
+          { ...baseDto, bankPeriodBonusId: 'няма-такъв' },
+          admin,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('бонус на друга банка → 400', async () => {
+      bankPeriodBonus.findUnique.mockResolvedValue({
+        id: 'bonus-1',
+        bankId: 'ДРУГА-банка',
+      });
+      await expect(
+        service.create(
+          'bank-1',
+          { ...baseDto, bankPeriodBonusId: 'bonus-1' },
           admin,
         ),
       ).rejects.toBeInstanceOf(BadRequestException);

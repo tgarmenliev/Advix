@@ -28,4 +28,13 @@ export class CreateAdjustmentDto {
   @IsOptional()
   @IsUUID()
   loanApplicationId?: string;
+
+  /**
+   * По избор — ако корекцията е по получен ПЕРИОДЕН БОНУС, не по сделка
+   * (напр. банка, която при предсрочно погасяване иска обратно тримесечния
+   * бонус, не комисионата по конкретния кредит).
+   */
+  @IsOptional()
+  @IsUUID()
+  bankPeriodBonusId?: string;
 }

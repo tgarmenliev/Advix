@@ -46,10 +46,25 @@ export class CommissionAdjustmentsService {
       }
     }
 
+    if (dto.bankPeriodBonusId) {
+      const bonus = await this.db.bankPeriodBonus.findUnique({
+        where: { id: dto.bankPeriodBonusId },
+      });
+      if (!bonus) {
+        throw new BadRequestException('Bank period bonus not found');
+      }
+      if (bonus.bankId !== bankId) {
+        throw new BadRequestException(
+          'The bonus belongs to a different bank',
+        );
+      }
+    }
+
     return this.db.commissionAdjustment.create({
       data: {
         bankId,
         loanApplicationId: dto.loanApplicationId,
+        bankPeriodBonusId: dto.bankPeriodBonusId,
         type: dto.type,
         amount: dto.amount,
         reason: dto.reason,
