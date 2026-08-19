@@ -99,10 +99,15 @@ enum CommissionSchemeType {
   BONUS                 // Бонус
 }
 
-/// Единственото разделение по тип кредит, което банките правят при комисионите
+/// Разделението по тип кредит, което банките правят при комисионите.
+/// BUSINESS е отделна категория (не CONSUMER) — цените за бизнес кредити са
+/// категорично различни (виж CommissionScheme.label за подкатегории вътре в нея,
+/// напр. "Кредитна линия" срещу "Инвестиционен кредит" — те не се моделират
+/// като отделни enum стойности, защото всяка банка ги дели различно).
 enum CommissionLoanCategory {
   MORTGAGE              // Ипотечен (със и без покупка)
   CONSUMER              // Потребителски
+  BUSINESS              // Бизнес
 }
 
 /// Периодите са КАЛЕНДАРНО подравнени (тримесечие = яну–мар, апр–юни...)
@@ -123,7 +128,9 @@ enum CommissionEvaluationMode {
 
 enum CommissionBasis {
   FLAT_PERCENT          // Фиксиран процент, независим от обема
-  VOLUME_TIERED         // Процентът зависи от обема за периода
+  VOLUME_TIERED         // Процентът зависи от обема (сума в стотинки) за периода
+  COUNT_TIERED          // Процентът зависи от БРОЯ сделки за периода (напр.
+                         // бизнес кредити: 2 бр./тримесечие срещу 3+ бр.)
 }
 
 enum PartnerCommissionStatus {
@@ -536,6 +543,12 @@ model CommissionAdjustment {
   loanApplicationId String?
   loanApplication   LoanApplication? @relation(fields: [loanApplicationId], references: [id])
 
+  /// Ако корекцията е по получен ПЕРИОДЕН БОНУС, не по сделка (напр. банка,
+  /// която при предсрочно погасяване в 1-та година иска обратно бонуса за
+  /// тримесечния таргет, а не комисионата по конкретния кредит)
+  bankPeriodBonusId String?
+  bankPeriodBonus   BankPeriodBonus? @relation(fields: [bankPeriodBonusId], references: [id])
+
   type              CommissionAdjustmentType
   /// Стотинки; ОТРИЦАТЕЛНА при clawback
   amount            Int
@@ -549,6 +562,7 @@ model CommissionAdjustment {
 
   @@index([bankId])
   @@index([loanApplicationId])
+  @@index([bankPeriodBonusId])
 }
 
 /// Начислен бонус от банка за отчетен период.
@@ -570,6 +584,12 @@ model BankPeriodBonus {
   periodIndex     Int
   periodLabel     String                                // "2026-Q1"
 
+  /// Продуктов етикет (виж CommissionScheme.label) — "" (не null!) когато е
+  /// единствената схема. NOT NULL с default("") нарочно, защото Postgres не
+  /// брои два NULL-а за еднакви в @@unique, а тук трябва точно един ред на
+  /// комбинация банка+категория+период+продукт.
+  label           String   @default("")
+
   /// Обемът, върху който е сметнат бонусът (стотинки)
   volume          Int
   appliedPercent  Float
@@ -578,7 +598,9 @@ model BankPeriodBonus {
   occurredAt      DateTime?
   status          CommissionStatus @default(EXPECTED)
 
-  @@unique([bankId, loanCategory, periodType, periodYear, periodIndex])
+  adjustments     CommissionAdjustment[]
+
+  @@unique([bankId, loanCategory, periodType, periodYear, periodIndex, label])
   @@index([bankId])
 }
 
@@ -607,12 +629,25 @@ model CommissionScheme {
   // При FLAT_PERCENT
   flatPercent     Float?                                // 0.01 = 1.00%
 
-  // При VOLUME_TIERED
+  // При VOLUME_TIERED / COUNT_TIERED
   periodType      CommissionPeriodType?
   evaluationMode  CommissionEvaluationMode?
 
   /// Таван на комисионата за ЕДНА сделка (стотинки)
   maxPerDealAmount Int?
+
+  /// Свободен етикет за подкатегория ВЪТРЕ в loanCategory (напр. "Кредитна
+  /// линия" срещу "Инвестиционен кредит") — всяка банка ги дели различно, затова
+  /// не се моделират като enum. Когато за банка+вид+категория има повече от
+  /// една активна схема, консултантът избира ръчно по label коя да приложи.
+  /// null = единствената/общата схема за тази комбинация.
+  label           String?
+
+  /// Условия за връщане на вече получена комисиона/бонус (clawback), описани
+  /// свободно текстово — всяка банка има различна логика (по година, по
+  /// прогресивна скала на връщане, дори връщане на бонус вместо комисиона).
+  /// Версионирано заедно с validFrom/validTo на схемата.
+  clawbackPolicy  String?
 
   notes           String?
 
@@ -622,8 +657,10 @@ model CommissionScheme {
   @@index([bankId, schemeType, loanCategory])
 }
 
-/// Скала по обем в рамките на схема.
-/// Достигнатата скала се прилага върху ЦЕЛИЯ обем за периода (затова при
+/// Скала в рамките на схема — по ОБЕМ (VOLUME_TIERED) или по БРОЙ сделки
+/// (COUNT_TIERED), в зависимост от basis на схемата. Само едната двойка
+/// граници се попълва.
+/// Достигнатата скала се прилага върху ЦЕЛИЯ обем/брой за периода (затова при
 /// прогресивния режим банката доплаща разликата за вече отчетените месеци).
 model CommissionTier {
   id          String            @id @default(uuid())
@@ -631,8 +668,13 @@ model CommissionTier {
   schemeId    String
   scheme      CommissionScheme  @relation(fields: [schemeId], references: [id], onDelete: Cascade)
 
-  minVolume   Int                                       // стотинки, включително
-  maxVolume   Int?                                      // стотинки, изключително; null = без таван
+  /// При VOLUME_TIERED — стотинки, включително / изключително; null = без таван
+  minVolume   Int?
+  maxVolume   Int?
+  /// При COUNT_TIERED — брой сделки, включително / изключително; null = без таван
+  minCount    Int?
+  maxCount    Int?
+
   percent     Float                                     // 0.01 = 1.00%
 
   @@index([schemeId])
@@ -771,6 +813,13 @@ model Disbursement {
   trancheNumber Int                                     // Номер на транша (1, 2, 3...)
   amount        Int                // Усвоена сума на транша
   disbursedAt   DateTime                                // Дата на усвояване
+
+  /// Кой продукт на банката е тази сделка — трябва да съвпада с
+  /// CommissionScheme.label, когато банката има повече от една активна схема
+  /// за категорията (напр. бизнес: "Кредитна линия" срещу "Инвестиционен
+  /// кредит"). Консултантът го задава при запис на транша; null означава
+  /// единствената/общата схема за тази категория.
+  commissionLabel String?
 
   // Комисиона за този транш
   commission    TrancheCommission?
