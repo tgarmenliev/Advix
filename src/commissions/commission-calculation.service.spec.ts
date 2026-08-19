@@ -287,4 +287,140 @@ describe('CommissionCalculationService', () => {
       expect(sum).toBe(rows[rows.length - 1].cumulativePayable);
     });
   });
+
+  /**
+   * Скали по БРОЙ сделки (COUNT_TIERED) — реалният пример на банка с бизнес
+   * кредити: "0,6% при 2 бр. кредита на тримесечие, 1% при 3+ бр."
+   * Скалите: 0–2 сделки → 0,6% | 3+ сделки → 1%.
+   */
+  describe('COUNT_TIERED — скали по брой сделки (бизнес кредити)', () => {
+    const countScheme = (over: Partial<SchemeWithTiers> = {}): SchemeWithTiers =>
+      ({
+        id: 's-count',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        bankId: 'bank-1',
+        schemeType: CommissionSchemeType.COMMISSION,
+        loanCategory: CommissionLoanCategory.BUSINESS,
+        validFrom: new Date('2026-01-01'),
+        validTo: null,
+        basis: CommissionBasis.COUNT_TIERED,
+        flatPercent: null,
+        periodType: CommissionPeriodType.QUARTERLY,
+        evaluationMode: CommissionEvaluationMode.END_OF_PERIOD,
+        maxPerDealAmount: null,
+        label: 'Оборотни средства',
+        clawbackPolicy: null,
+        notes: null,
+        tiers: [
+          {
+            id: 'c1',
+            schemeId: 's-count',
+            minVolume: null,
+            maxVolume: null,
+            minCount: 0,
+            maxCount: 3,
+            percent: 0.006,
+          },
+          {
+            id: 'c2',
+            schemeId: 's-count',
+            minVolume: null,
+            maxVolume: null,
+            minCount: 3,
+            maxCount: null,
+            percent: 0.01,
+          },
+        ],
+        ...over,
+      }) as SchemeWithTiers;
+
+    it('resolveTierByCount избира скалата по БРОЙ, не по обем', () => {
+      expect(
+        service.resolveTierByCount(countScheme(), 1)?.percent,
+      ).toBe(0.006);
+      expect(
+        service.resolveTierByCount(countScheme(), 3)?.percent,
+      ).toBe(0.01);
+    });
+
+    it('resolveTier (по обем) не важи за COUNT_TIERED схема', () => {
+      expect(service.resolveTier(countScheme(), 999_999_999)).toBeNull();
+    });
+
+    it('две сделки (2 бр.) → 0,6% приложено върху реалните пари', () => {
+      const disbursements = [
+        disb('d1', 5_000_000, '2026-01-10', 'app-A'),
+        disb('d2', 3_000_000, '2026-02-10', 'app-B'),
+      ];
+      const result = service.calculatePeriod(countScheme(), q1, disbursements);
+
+      expect(result.dealCount).toBe(2);
+      expect(result.appliedPercent).toBe(0.006);
+      // Процентът е избран по БРОЙ, но сумата се смята върху реалните пари
+      expect(result.lines[0].amount).toBe(30_000); // 50 000 × 0,6%
+      expect(result.lines[1].amount).toBe(18_000); // 30 000 × 0,6%
+      expect(result.total).toBe(48_000);
+    });
+
+    it('три сделки (3+ бр.) → скача на 1%, приложено върху ВСИЧКИ сделки на периода', () => {
+      const disbursements = [
+        disb('d1', 5_000_000, '2026-01-10', 'app-A'),
+        disb('d2', 3_000_000, '2026-02-10', 'app-B'),
+        disb('d3', 2_000_000, '2026-03-10', 'app-C'),
+      ];
+      const result = service.calculatePeriod(countScheme(), q1, disbursements);
+
+      expect(result.dealCount).toBe(3);
+      expect(result.appliedPercent).toBe(0.01);
+      expect(result.total).toBe(100_000); // (5M+3M+2M) × 1%
+    });
+
+    it('два транша по ЕДНА заявка се броят за ЕДНА сделка', () => {
+      const disbursements = [
+        disb('d1', 5_000_000, '2026-01-10', 'app-A'),
+        disb('d2', 3_000_000, '2026-02-10', 'app-A'), // същата заявка
+      ];
+      const result = service.calculatePeriod(countScheme(), q1, disbursements);
+
+      expect(result.dealCount).toBe(1); // не 2
+      expect(result.appliedPercent).toBe(0.006);
+    });
+
+    it('месечна разбивка: процентът следва натрупания БРОЙ, а сумата — натрупания ОБЕМ', () => {
+      const progressive = countScheme({
+        evaluationMode: CommissionEvaluationMode.PROGRESSIVE_RETROACTIVE,
+      });
+      const disbursements = [
+        disb('d1', 5_000_000, '2026-01-10', 'app-A'), // яну: 1-ва сделка
+        disb('d2', 3_000_000, '2026-02-10', 'app-B'), // фев: 2-ра сделка
+        disb('d3', 2_000_000, '2026-03-10', 'app-C'), // мар: 3-та сделка → скок на 1%
+      ];
+      const rows = service.buildMonthlyBreakdown(progressive, q1, disbursements);
+
+      expect(rows[0]).toMatchObject({ cumulativeCount: 1, percent: 0.006 });
+      expect(rows[1]).toMatchObject({ cumulativeCount: 2, percent: 0.006 });
+      // 3-та сделка бута процента на 1% — доплащане назад за яну+фев
+      expect(rows[2]).toMatchObject({ cumulativeCount: 3, percent: 0.01 });
+      expect(rows[2].retroactiveTopUp).toBeGreaterThan(0);
+
+      // И тук двата режима трябва да съвпадат в крайната сума
+      const progressiveTotal = rows.reduce((s, r) => s + r.payableThisMonth, 0);
+      const endOfPeriod = service.calculatePeriod(
+        countScheme({ evaluationMode: CommissionEvaluationMode.END_OF_PERIOD }),
+        q1,
+        disbursements,
+      );
+      expect(progressiveTotal).toBe(endOfPeriod.total);
+    });
+
+    it('таванът на сделка важи и при COUNT_TIERED (независим механизъм)', () => {
+      const capped = countScheme({ maxPerDealAmount: 20_000 });
+      const result = service.calculatePeriod(capped, q1, [
+        disb('d1', 5_000_000, '2026-01-10', 'app-A'), // 0,6% = 30 000 → отрязан до 20 000
+      ]);
+      expect(result.lines[0].amount).toBe(20_000);
+      expect(result.lines[0].capApplied).toBe(true);
+    });
+  });
 });

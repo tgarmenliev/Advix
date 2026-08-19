@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   CommissionBasis,
   CommissionEvaluationMode,
+  CommissionPeriodType,
   CommissionTier,
 } from '@prisma/client';
 import { SchemeWithTiers } from '../commission-schemes/commission-schemes.service';
@@ -10,7 +11,6 @@ import {
   calendarPeriod,
   monthlyCheckpoints,
 } from '../commission-schemes/period.util';
-import { CommissionPeriodType } from '@prisma/client';
 
 /** Транш, подаден на калкулатора (без зависимост от Prisma моделите). */
 export interface DisbursementInput {
@@ -38,6 +38,11 @@ export interface MonthlyBreakdownRow {
   monthLabel: string;
   monthVolume: number;
   cumulativeVolume: number;
+  /** Различни сделки (заявки) с усвояване през този месец */
+  monthCount: number;
+  /** Различни сделки от началото на периода до края на този месец — базата
+   *  за COUNT_TIERED скалите */
+  cumulativeCount: number;
   percent: number;
   /** Изкараното от обема на самия месец по текущия процент */
   earnedThisMonth: number;
@@ -51,6 +56,8 @@ export interface MonthlyBreakdownRow {
 export interface PeriodCalculation {
   period: CalendarPeriod;
   volume: number;
+  /** Различни сделки (заявки) с усвояване за периода — базата за COUNT_TIERED */
+  dealCount: number;
   appliedPercent: number;
   tier: CommissionTier | null;
   lines: CommissionLine[];
@@ -64,6 +71,13 @@ export interface PeriodCalculation {
  * Чист калкулационен слой за банкови комисиони и бонуси — само аритметика,
  * без достъп до базата и без странични ефекти.
  *
+ * Скалите могат да зависят от ОБЕМ (VOLUME_TIERED — сума в стотинки) или от
+ * БРОЙ сделки (COUNT_TIERED — напр. бизнес кредити: "0,6% при 2 бр./тримесечие,
+ * 1% при 3+ бр."). Броят винаги е броят РАЗЛИЧНИ заявки с усвояване — две
+ * траншове по една и съща заявка се броят за една сделка. Кой да е измерение
+ * само определя КОЙ процент важи; сумата се смята винаги върху реално
+ * усвоените пари (percent × amount), независимо как е избран процентът.
+ *
  * Двата режима на отчитане дават ЕДИН И СЪЩ краен резултат; различава се само
  * кога влизат парите и как изглежда месечният отчет. Затова общата сума се
  * смята еднакво, а прогресивният режим добавя само разбивка по месеци.
@@ -72,30 +86,60 @@ export interface PeriodCalculation {
  */
 @Injectable()
 export class CommissionCalculationService {
-  /** Скалата, в която попада обемът (null при фиксиран процент). */
+  /** Скалата по ОБЕМ, в която попада сумата (null извън VOLUME_TIERED). */
   resolveTier(scheme: SchemeWithTiers, volume: number): CommissionTier | null {
     if (scheme.basis !== CommissionBasis.VOLUME_TIERED) {
       return null;
     }
-    const sorted = [...scheme.tiers].sort((a, b) => a.minVolume - b.minVolume);
-    return (
-      sorted.find(
-        (tier) =>
-          volume >= tier.minVolume &&
-          (tier.maxVolume === null || volume < tier.maxVolume),
-      ) ??
-      // Обем над последната граница попада в последната (отворена) скала
-      sorted[sorted.length - 1] ??
-      null
+    return this.resolveTierFromList(
+      scheme.tiers,
+      volume,
+      (t) => t.minVolume,
+      (t) => t.maxVolume,
     );
   }
 
-  /** Процентът, приложим към ЦЕЛИЯ обем за периода. */
-  effectivePercent(scheme: SchemeWithTiers, volume: number): number {
-    if (scheme.basis === CommissionBasis.FLAT_PERCENT) {
-      return scheme.flatPercent ?? 0;
+  /** Скалата по БРОЙ сделки, в която попада броят (null извън COUNT_TIERED). */
+  resolveTierByCount(
+    scheme: SchemeWithTiers,
+    count: number,
+  ): CommissionTier | null {
+    if (scheme.basis !== CommissionBasis.COUNT_TIERED) {
+      return null;
     }
-    return this.resolveTier(scheme, volume)?.percent ?? 0;
+    return this.resolveTierFromList(
+      scheme.tiers,
+      count,
+      (t) => t.minCount,
+      (t) => t.maxCount,
+    );
+  }
+
+  /** Процентът, приложим към ЦЕЛИЯ обем за периода (VOLUME_TIERED/FLAT). */
+  effectivePercent(scheme: SchemeWithTiers, volume: number): number {
+    return this.percentForMeasures(scheme, { volume, count: 0 });
+  }
+
+  /**
+   * Процентът спрямо мярката, отговаряща на basis на схемата: обем при
+   * VOLUME_TIERED, брой сделки при COUNT_TIERED, винаги flatPercent при
+   * FLAT_PERCENT. Това е единствената точка, от която calculatePeriod и
+   * buildMonthlyBreakdown вземат процента — гарантира, че двете скали не се
+   * объркват.
+   */
+  percentForMeasures(
+    scheme: SchemeWithTiers,
+    measures: { volume: number; count: number },
+  ): number {
+    switch (scheme.basis) {
+      case CommissionBasis.FLAT_PERCENT:
+        return scheme.flatPercent ?? 0;
+      case CommissionBasis.COUNT_TIERED:
+        return this.resolveTierByCount(scheme, measures.count)?.percent ?? 0;
+      case CommissionBasis.VOLUME_TIERED:
+      default:
+        return this.resolveTier(scheme, measures.volume)?.percent ?? 0;
+    }
   }
 
   /**
@@ -112,8 +156,17 @@ export class CommissionCalculationService {
     priorPerApplication: Map<string, number> = new Map(),
   ): PeriodCalculation {
     const volume = disbursements.reduce((sum, d) => sum + d.amount, 0);
-    const tier = this.resolveTier(scheme, volume);
-    const appliedPercent = this.effectivePercent(scheme, volume);
+    const dealCount = new Set(disbursements.map((d) => d.loanApplicationId))
+      .size;
+
+    const tier =
+      scheme.basis === CommissionBasis.COUNT_TIERED
+        ? this.resolveTierByCount(scheme, dealCount)
+        : this.resolveTier(scheme, volume);
+    const appliedPercent = this.percentForMeasures(scheme, {
+      volume,
+      count: dealCount,
+    });
 
     const lines = this.buildLines(
       scheme,
@@ -131,6 +184,7 @@ export class CommissionCalculationService {
     return {
       period,
       volume,
+      dealCount,
       appliedPercent,
       tier,
       lines,
@@ -144,7 +198,9 @@ export class CommissionCalculationService {
    *
    * Дължимото се смята върху НАТРУПАНИЯ обем по текущия процент, а от него се
    * вади вече изплатеното — така доплащането за минали месеци се получава
-   * естествено и без натрупване на грешки от закръгляне.
+   * естествено и без натрупване на грешки от закръгляне. Процентът се
+   * определя от натрупания обем ИЛИ натрупания брой сделки (спрямо basis), но
+   * винаги се умножава по натрупания ПАРИЧЕН обем — броят само избира скалата.
    */
   buildMonthlyBreakdown(
     scheme: SchemeWithTiers,
@@ -154,17 +210,29 @@ export class CommissionCalculationService {
     const rows: MonthlyBreakdownRow[] = [];
     let cumulativeVolume = 0;
     let cumulativePayable = 0;
+    const seenApplications = new Set<string>();
 
     for (const monthStart of monthlyCheckpoints(period)) {
       const month = calendarPeriod(monthStart, CommissionPeriodType.MONTHLY);
-      const monthVolume = disbursements
-        .filter(
-          (d) => d.disbursedAt >= month.startsAt && d.disbursedAt < month.endsAt,
-        )
-        .reduce((sum, d) => sum + d.amount, 0);
+      const monthDisbursements = disbursements.filter(
+        (d) => d.disbursedAt >= month.startsAt && d.disbursedAt < month.endsAt,
+      );
+      const monthVolume = monthDisbursements.reduce(
+        (sum, d) => sum + d.amount,
+        0,
+      );
+      const monthApplications = new Set(
+        monthDisbursements.map((d) => d.loanApplicationId),
+      );
+      for (const id of monthApplications) seenApplications.add(id);
 
       cumulativeVolume += monthVolume;
-      const percent = this.effectivePercent(scheme, cumulativeVolume);
+      const cumulativeCount = seenApplications.size;
+
+      const percent = this.percentForMeasures(scheme, {
+        volume: cumulativeVolume,
+        count: cumulativeCount,
+      });
 
       const payableSoFar = Math.round(cumulativeVolume * percent);
       const payableThisMonth = payableSoFar - cumulativePayable;
@@ -174,6 +242,8 @@ export class CommissionCalculationService {
         monthLabel: month.label,
         monthVolume,
         cumulativeVolume,
+        monthCount: monthApplications.size,
+        cumulativeCount,
         percent,
         earnedThisMonth,
         // Каквото остава над изкараното от този месец е доплащане назад
@@ -231,5 +301,27 @@ export class CommissionCalculationService {
         capApplied,
       };
     });
+  }
+
+  /** Общ резолвър — намира скалата, в която попада мярката (обем или брой). */
+  private resolveTierFromList(
+    tiers: CommissionTier[],
+    measure: number,
+    getMin: (t: CommissionTier) => number | null,
+    getMax: (t: CommissionTier) => number | null,
+  ): CommissionTier | null {
+    const sorted = [...tiers].sort(
+      (a, b) => (getMin(a) ?? 0) - (getMin(b) ?? 0),
+    );
+    return (
+      sorted.find((tier) => {
+        const min = getMin(tier) ?? 0;
+        const max = getMax(tier);
+        return measure >= min && (max === null || measure < max);
+      }) ??
+      // Над последната граница попада в последната (отворена) скала
+      sorted[sorted.length - 1] ??
+      null
+    );
   }
 }
