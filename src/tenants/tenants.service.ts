@@ -20,10 +20,10 @@ import { PrismaService, SCHEMA_NAME_PATTERN } from '../database/prisma.service';
  * 3. Изпълнява програмно всички migration.sql файлове от prisma/migrations/
  *    с search_path, сочещ новата schema — така tenant schema-та получава
  *    същата структура като public, без ръчно писани migrations
- * 4. Дропва копията на глобалните таблици Tenant/User от tenant schema-та
- *    (те живеят само в public; CASCADE маха FK-тата на LoanApplication/AuditLog/
- *    SecureLink към локалния User — тези колони остават като plain UUID връзки
- *    към public.User)
+ * 4. Дропва копията на глобалните таблици Tenant/User/SecureLinkIndex от
+ *    tenant schema-та (те живеят само в public; CASCADE маха FK-тата на
+ *    LoanApplication/AuditLog/SecureLink към локалния User — тези колони
+ *    остават като plain UUID връзки към public.User)
  *
  * Стъпки 2–4 са в една транзакция; при грешка schema-та не остава наполовина,
  * а Tenant записът се трие.
@@ -84,6 +84,9 @@ export class TenantsService {
       // Глобалните таблици живеят само в public — виж class-level коментара
       await pg.query(`DROP TABLE IF EXISTS "${schemaName}"."User" CASCADE`);
       await pg.query(`DROP TABLE IF EXISTS "${schemaName}"."Tenant" CASCADE`);
+      await pg.query(
+        `DROP TABLE IF EXISTS "${schemaName}"."SecureLinkIndex" CASCADE`,
+      );
       await pg.query('COMMIT');
     } catch (error) {
       await pg.query('ROLLBACK').catch(() => undefined);

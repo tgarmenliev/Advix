@@ -209,6 +209,17 @@ model Tenant {
   users       User[]
 }
 
+/// Лек публичен индекс token хеш → tenant, за да може заявка с гол Secure Link
+/// токен (без JWT, без известен tenant) да намери коя tenant schema да отвори,
+/// БЕЗ да се налага претърсване на всички schema-и. Пълният SecureLink запис
+/// (clientId, loanApplicationId, срок, статус) си остава в tenant schema-та —
+/// тук пазим само минимума, нужен за маршрутизация.
+model SecureLinkIndex {
+  tokenHash String   @id
+  tenantId  String
+  createdAt DateTime @default(now())
+}
+
 /// Потребител на системата (всички роли)
 model User {
   id            String    @id @default(uuid())
@@ -434,7 +445,9 @@ model LoanStatusHistory {
   fromStatus        LoanStatus?                         // null при първо създаване
   toStatus          LoanStatus
   changedAt         DateTime        @default(now())
-  changedByUserId   String
+  // Nullable — преход, задействан от клиент през Secure Link, няма User
+  // (виж AuditLog.secureLinkId за реалната следа кой линк го е направил)
+  changedByUserId   String?
   note              String?
 
   @@index([loanApplicationId])
@@ -955,16 +968,22 @@ enum SecureLinkStatus {
 // SECURE LINKS
 // =============================================================================
 
-/// Защитен еднократен линк, изпратен на клиент или съдлъжник
-/// Не изисква регистрация — достъпен само с токена в URL-а
+/// Защитен линк, изпратен на клиент или съдлъжник по конкретна заявка.
+/// Не изисква регистрация — достъпен само с токена в URL-а. Един линк на
+/// (получател × заявка), НЕ един линк на действие: даденият достъп обхваща
+/// каквото в момента е валидно да се направи по тази заявка (попълване на
+/// данни, преглед/избор на оферта, GDPR съгласие) — изведено динамично от
+/// реалното състояние на заявката/клиента, не фиксирано при създаване.
+/// Виж docs/12-secure-links.md за пълната обосновка.
 model SecureLink {
   id                String          @id @default(uuid())
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
 
-  // Уникален токен, вграден в URL-а (напр. /secure/abc123xyz)
-  // Генерира се с crypto.randomBytes(32) — не е предвидим
-  token             String          @unique @default(uuid())
+  // SHA-256 хеш на токена (никога не се пази в чист вид — същия принцип като
+  // User.refreshTokenHash). Токенът се генерира с crypto.randomBytes(32) в
+  // сервиза, никога през Prisma-default-а по-долу (той е само fallback).
+  tokenHash         String          @unique @default(uuid())
 
   loanApplicationId String
   loanApplication   LoanApplication @relation(fields: [loanApplicationId], references: [id])
@@ -973,23 +992,34 @@ model SecureLink {
   createdByUserId   String
   createdBy         User            @relation("CreatedSecureLinks", fields: [createdByUserId], references: [id])
 
-  // За кого е линкът (клиент или съдлъжник)
-  // Само едното ще е попълнено
+  // За кого е линкът (клиент или съдлъжник) — само едното ще е попълнено,
+  // проверява се на ниво сервиз (Prisma няма native XOR ограничение)
   clientId          String?
   client            Client?         @relation(fields: [clientId], references: [id])
 
   familyMemberId    String?
   familyMember      FamilyMember?   @relation(fields: [familyMemberId], references: [id])
 
-  purpose           SecureLinkPurpose
+  // Информативна подсказка защо е изпратен линкът (напр. текста на имейла) —
+  // НЕ ограничава кои действия са позволени. Достъпните действия винаги се
+  // извеждат от реалното състояние на заявката/клиента при всяко отваряне.
+  purpose           SecureLinkPurpose?
+
+  // ACTIVE/USED са и двете напълно използваеми състояния — USED е само
+  // информативен сигнал, че поне едно терминално действие вече е станало
+  // (избрана оферта / дадено съгласие), не блокира други все още валидни
+  // действия. EXPIRED/REVOKED винаги блокират — проверява се на живо срещу
+  // expiresAt, не се разчита само на кеширания статус.
   status            SecureLinkStatus  @default(ACTIVE)
 
   expiresAt         DateTime                            // Линкът изтича след X часа/дни
-  usedAt            DateTime?                           // Кога е бил използван
+  usedAt            DateTime?                           // Кога е било направено първото действие
 
-  @@index([token])
+  auditLogs         AuditLog[]
+
   @@index([loanApplicationId])
   @@index([clientId])
+  @@index([familyMemberId])
 }
 
 // =============================================================================
@@ -1002,8 +1032,14 @@ model AuditLog {
   id          String      @id @default(uuid())
   createdAt   DateTime    @default(now())
 
-  userId      String
-  user        User        @relation(fields: [userId], references: [id])
+  // Nullable — действие през Secure Link няма реален User (виж secureLinkId
+  // по-долу). Никога не се приписва на друг потребител, за да остане верен.
+  userId      String?
+  user        User?       @relation(fields: [userId], references: [id])
+
+  // Кой Secure Link е действал, когато няма User (клиент/съдлъжник без акаунт)
+  secureLinkId String?
+  secureLink   SecureLink? @relation(fields: [secureLinkId], references: [id])
 
   action      AuditAction
 
@@ -1021,6 +1057,7 @@ model AuditLog {
   metadata    Json?                                     // Допълнителен контекст (IP, device и т.н.)
 
   @@index([userId])
+  @@index([secureLinkId])
   @@index([loanApplicationId])
   @@index([entityType, entityId])
   @@index([createdAt])
