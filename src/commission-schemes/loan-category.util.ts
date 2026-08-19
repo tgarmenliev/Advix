@@ -1,12 +1,9 @@
 import { CommissionLoanCategory, LoanType } from '@prisma/client';
 
 /**
- * Банките правят само едно разделение при комисионите: ипотечен срещу
- * потребителски кредит. Четирите типа заявки се свеждат до тези две категории.
- *
- * Забележка: бизнес кредитът засега се третира като потребителски, защото
- * заданието изрично казва „само това разделение". Ако банките дават различна
- * комисиона за бизнес кредити, тук се добавя трета категория.
+ * Банките разделят комисионите по тип кредит: ипотечен, потребителски и
+ * бизнес — трите имат категорично различни цени (бизнес кредитите често имат
+ * и собствени подкатегории, вижте CommissionScheme.label).
  */
 export function loanTypeToCommissionCategory(
   loanType: LoanType,
@@ -16,8 +13,9 @@ export function loanTypeToCommissionCategory(
     case LoanType.MORTGAGE_WITH_PURCHASE:
       return CommissionLoanCategory.MORTGAGE;
     case LoanType.CONSUMER:
-    case LoanType.BUSINESS:
       return CommissionLoanCategory.CONSUMER;
+    case LoanType.BUSINESS:
+      return CommissionLoanCategory.BUSINESS;
   }
 }
 

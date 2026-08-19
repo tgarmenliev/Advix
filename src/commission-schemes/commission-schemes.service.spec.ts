@@ -371,6 +371,150 @@ describe('CommissionSchemesService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
+
+  /**
+   * COUNT_TIERED — реалният случай на бизнес кредити с тиериране по БРОЙ
+   * сделки за периода (напр. "0,6% при 2 бр./тримесечие, 1% при 3+ бр.").
+   * Валидацията на скалите е идентична на VOLUME_TIERED, само по count полета.
+   */
+  describe('COUNT_TIERED схеми', () => {
+    const countTieredDto = (
+      over: Partial<CreateCommissionSchemeDto> = {},
+    ): CreateCommissionSchemeDto => ({
+      schemeType: CommissionSchemeType.COMMISSION,
+      loanCategory: CommissionLoanCategory.BUSINESS,
+      validFrom: '2026-01-01',
+      basis: CommissionBasis.COUNT_TIERED,
+      periodType: CommissionPeriodType.QUARTERLY,
+      evaluationMode: CommissionEvaluationMode.END_OF_PERIOD,
+      label: 'Оборотни средства',
+      tiers: [
+        { minCount: 0, maxCount: 3, percent: 0.006 },
+        { minCount: 3, percent: 0.01 },
+      ],
+      ...over,
+    });
+
+    it('приема валидни скали по брой', async () => {
+      await expect(
+        service.create('bank-1', countTieredDto()),
+      ).resolves.toBeDefined();
+    });
+
+    it('дупка между count скалите → 400', async () => {
+      await expect(
+        service.create(
+          'bank-1',
+          countTieredDto({
+            tiers: [
+              { minCount: 0, maxCount: 2, percent: 0.006 },
+              { minCount: 5, percent: 0.01 }, // дупка 2–5
+            ],
+          }),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('първата count скала трябва да започва от 0', async () => {
+      await expect(
+        service.create(
+          'bank-1',
+          countTieredDto({
+            tiers: [
+              { minCount: 1, maxCount: 3, percent: 0.006 },
+              { minCount: 3, percent: 0.01 },
+            ],
+          }),
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('без периоден тип/режим на отчитане → 400 (както при VOLUME_TIERED)', async () => {
+      await expect(
+        service.create('bank-1', countTieredDto({ periodType: undefined })),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  /**
+   * Label: две схеми за същата банка+вид+категория, но различни продукти
+   * (бизнес подкатегории) — не трябва да се броят за застъпване.
+   */
+  describe('label и застъпване на валидност', () => {
+    it('различни label-и за същия ключ МОГАТ да съществуват едновременно', async () => {
+      // Първата схема ("Кредитна линия") вече покрива периода
+      commissionScheme.findFirst.mockImplementation(
+        ({ where }: { where: { label?: string | null } }) =>
+          Promise.resolve(where.label === 'Кредитна линия' ? { id: 'existing', validFrom: new Date('2026-01-01') } : null),
+      );
+
+      await expect(
+        service.create(
+          'bank-1',
+          flatDto({
+            loanCategory: CommissionLoanCategory.BUSINESS,
+            label: 'Инсталментни кредити', // друг продукт — не влиза в конфликт
+          }),
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it('два реда за СЪЩИЯ label и застъпваща валидност → 409', async () => {
+      commissionScheme.findFirst.mockResolvedValue({
+        id: 'existing',
+        validFrom: new Date('2026-01-01'),
+      });
+
+      await expect(
+        service.create(
+          'bank-1',
+          flatDto({
+            loanCategory: CommissionLoanCategory.BUSINESS,
+            label: 'Инсталментни кредити',
+          }),
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('overlap проверката филтрира изрично по label в заявката към базата', async () => {
+      await service.create(
+        'bank-1',
+        flatDto({ loanCategory: CommissionLoanCategory.BUSINESS, label: 'Линии' }),
+      );
+      expect(commissionScheme.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ label: 'Линии' }),
+        }),
+      );
+    });
+  });
+
+  describe('findActiveSchemes', () => {
+    it('връща всички активни схеми (за консултанта да избере при повече от една)', async () => {
+      commissionScheme.findMany.mockResolvedValue([
+        { id: 's1', label: 'Линии' },
+        { id: 's2', label: 'Инсталменти' },
+      ]);
+
+      const result = await service.findActiveSchemes(
+        'bank-1',
+        CommissionSchemeType.COMMISSION,
+        CommissionLoanCategory.BUSINESS,
+        new Date('2026-06-01'),
+      );
+
+      expect(result).toHaveLength(2);
+      expect(commissionScheme.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            bankId: 'bank-1',
+            schemeType: CommissionSchemeType.COMMISSION,
+            loanCategory: CommissionLoanCategory.BUSINESS,
+          }),
+        }),
+      );
+    });
+  });
 });
 
 describe('loanTypeToCommissionCategory', () => {
@@ -383,12 +527,12 @@ describe('loanTypeToCommissionCategory', () => {
     );
   });
 
-  it('потребителски и бизнес → CONSUMER', () => {
+  it('потребителски → CONSUMER, бизнес → собствена категория BUSINESS', () => {
     expect(loanTypeToCommissionCategory(LoanType.CONSUMER)).toBe(
       CommissionLoanCategory.CONSUMER,
     );
     expect(loanTypeToCommissionCategory(LoanType.BUSINESS)).toBe(
-      CommissionLoanCategory.CONSUMER,
+      CommissionLoanCategory.BUSINESS,
     );
   });
 });

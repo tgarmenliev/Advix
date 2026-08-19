@@ -66,7 +66,21 @@ export class CreateCommissionSchemeDto {
   @IsString()
   notes?: string;
 
-  /** При VOLUME_TIERED — скалите по обем */
+  /**
+   * Свободен етикет за подкатегория вътре в loanCategory (напр. "Кредитна
+   * линия" срещу "Инвестиционен кредит"). null/липсва = единствената схема за
+   * тази комбинация банка+вид+категория.
+   */
+  @IsOptional()
+  @IsString()
+  label?: string;
+
+  /** Условия за връщане на вече получена комисиона/бонус — свободен текст */
+  @IsOptional()
+  @IsString()
+  clawbackPolicy?: string;
+
+  /** При VOLUME_TIERED/COUNT_TIERED — скалите по обем или по брой сделки */
   @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
