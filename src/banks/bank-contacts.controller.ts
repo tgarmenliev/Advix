@@ -9,8 +9,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BankContactsService } from './bank-contacts.service';
@@ -31,6 +32,11 @@ import { UpdateBankContactDto } from './dto/update-bank-contact.dto';
 export class BankContactsController {
   constructor(private readonly bankContactsService: BankContactsService) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'BankContact',
+    entityIdSource: 'response',
+  })
   @Roles(UserRole.ADMIN, UserRole.CONSULTANT)
   @Post('banks/:bankId/contacts')
   create(
@@ -59,6 +65,11 @@ export class BankContactsController {
     return this.bankContactsService.findOne(id);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'BankContact',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN, UserRole.CONSULTANT)
   @Patch('bank-contacts/:id')
   update(
@@ -68,6 +79,11 @@ export class BankContactsController {
     return this.bankContactsService.update(id, dto);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'BankContact',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN, UserRole.CONSULTANT)
   @Delete('bank-contacts/:id')
   remove(@Param('id', ParseUUIDPipe) id: string) {

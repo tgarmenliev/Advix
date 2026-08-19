@@ -9,7 +9,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { ClientsService } from './clients.service';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -27,6 +28,11 @@ import { UpdateClientDto } from './dto/update-client.dto';
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'Client',
+    entityIdSource: 'response',
+  })
   @Post()
   create(@Body() dto: CreateClientDto) {
     return this.clientsService.create(dto);
@@ -42,6 +48,11 @@ export class ClientsController {
     return this.clientsService.findOne(id);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'Client',
+    entityIdSource: 'param',
+  })
   @Patch(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -50,6 +61,11 @@ export class ClientsController {
     return this.clientsService.update(id, dto);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'Client',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN, UserRole.CONSULTANT)
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {

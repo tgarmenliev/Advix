@@ -8,7 +8,8 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CreateFamilyMemberDto } from './dto/create-family-member.dto';
 import { UpdateFamilyMemberDto } from './dto/update-family-member.dto';
@@ -29,6 +30,11 @@ import { FamilyMembersService } from './family-members.service';
 export class FamilyMembersController {
   constructor(private readonly familyMembersService: FamilyMembersService) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'FamilyMember',
+    entityIdSource: 'response',
+  })
   @Post('clients/:clientId/family-members')
   create(
     @Param('clientId', ParseUUIDPipe) clientId: string,
@@ -47,6 +53,11 @@ export class FamilyMembersController {
     return this.familyMembersService.findOne(id);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'FamilyMember',
+    entityIdSource: 'param',
+  })
   @Patch('family-members/:id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -55,6 +66,11 @@ export class FamilyMembersController {
     return this.familyMembersService.update(id, dto);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'FamilyMember',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN, UserRole.CONSULTANT)
   @Delete('family-members/:id')
   remove(@Param('id', ParseUUIDPipe) id: string) {

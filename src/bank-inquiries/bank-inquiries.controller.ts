@@ -7,8 +7,9 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BankInquiriesService } from './bank-inquiries.service';
@@ -35,6 +36,11 @@ export class BankInquiriesController {
     return this.bankInquiriesService.preview(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.INQUIRY_SENT,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Post('loan-applications/:id/inquiries')
   send(
     @Param('id', ParseUUIDPipe) id: string,
@@ -52,6 +58,11 @@ export class BankInquiriesController {
     return this.bankInquiriesService.listForApplication(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'BankInquiry',
+    entityIdSource: 'param',
+  })
   @Patch('bank-inquiries/:id/status')
   updateStatus(
     @Param('id', ParseUUIDPipe) id: string,

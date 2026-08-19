@@ -8,8 +8,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BankOffersService } from './bank-offers.service';
@@ -28,6 +29,11 @@ import { UpdateBankOfferDto } from './dto/update-bank-offer.dto';
 export class BankOffersController {
   constructor(private readonly bankOffersService: BankOffersService) {}
 
+  @AuditLog({
+    action: AuditAction.OFFER_RECEIVED,
+    entityType: 'BankOffer',
+    entityIdSource: 'response',
+  })
   @Post('loan-applications/:id/offers')
   create(
     @Param('id', ParseUUIDPipe) id: string,
@@ -63,6 +69,11 @@ export class BankOffersController {
     return this.bankOffersService.findOne(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'BankOffer',
+    entityIdSource: 'param',
+  })
   @Patch('bank-offers/:id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -73,6 +84,11 @@ export class BankOffersController {
   }
 
   /** Отбелязва избора на клиента (клиентът избира сам през Secure Link — фаза 9) */
+  @AuditLog({
+    action: AuditAction.OFFER_SELECTED,
+    entityType: 'BankOffer',
+    entityIdSource: 'param',
+  })
   @Post('bank-offers/:id/select')
   select(
     @Param('id', ParseUUIDPipe) id: string,

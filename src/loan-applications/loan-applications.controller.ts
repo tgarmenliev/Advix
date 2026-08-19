@@ -9,7 +9,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
@@ -39,6 +40,11 @@ export class LoanApplicationsController {
     private readonly financialCalculationService: FinancialCalculationService,
   ) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'response',
+  })
   @Post()
   create(
     @Body() dto: CreateLoanApplicationDto,
@@ -63,6 +69,11 @@ export class LoanApplicationsController {
     return this.loanApplicationsService.findOne(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Patch(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -73,6 +84,11 @@ export class LoanApplicationsController {
   }
 
   // Назначаване/прехвърляне на консултант — само ADMIN
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch(':id/assign')
   assign(
@@ -88,6 +104,11 @@ export class LoanApplicationsController {
   }
 
   // Смяна на типа на кредита — рядък краен случай, само ADMIN
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch(':id/change-type')
   changeType(
@@ -99,6 +120,11 @@ export class LoanApplicationsController {
   }
 
   // Размяна основен клиент ↔ съдлъжник (PARTNER_A не участва)
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(
     UserRole.ADMIN,
     UserRole.CONSULTANT,
@@ -118,6 +144,11 @@ export class LoanApplicationsController {
     );
   }
 
+  @AuditLog({
+    action: AuditAction.STATUS_CHANGE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Post(':id/transition')
   transition(
     @Param('id', ParseUUIDPipe) id: string,
@@ -129,6 +160,11 @@ export class LoanApplicationsController {
 
   // --- Свързани лица по заявката ---
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Post(':id/family-members')
   addFamilyMember(
     @Param('id', ParseUUIDPipe) id: string,
@@ -150,6 +186,11 @@ export class LoanApplicationsController {
     return this.loanApplicationsService.listFamilyMembers(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Delete(':id/family-members/:familyMemberId')
   removeFamilyMember(
     @Param('id', ParseUUIDPipe) id: string,
@@ -165,6 +206,11 @@ export class LoanApplicationsController {
 
   // --- Имоти по заявката ---
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Post(':id/properties')
   linkProperty(
     @Param('id', ParseUUIDPipe) id: string,
@@ -182,6 +228,11 @@ export class LoanApplicationsController {
     return this.loanApplicationsService.listProperties(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Delete(':id/properties/:propertyId')
   unlinkProperty(
     @Param('id', ParseUUIDPipe) id: string,

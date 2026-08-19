@@ -8,7 +8,8 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BanksService } from './banks.service';
 import { CreateBankDto } from './dto/create-bank.dto';
@@ -27,6 +28,11 @@ import { UpdateBankDto } from './dto/update-bank.dto';
 export class BanksController {
   constructor(private readonly banksService: BanksService) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'Bank',
+    entityIdSource: 'response',
+  })
   @Roles(UserRole.ADMIN)
   @Post('banks')
   create(@Body() dto: CreateBankDto) {
@@ -43,6 +49,11 @@ export class BanksController {
     return this.banksService.findOne(id);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'Bank',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('banks/:id')
   update(
@@ -54,6 +65,11 @@ export class BanksController {
 
   // --- Офиси (само ADMIN за писане) ---
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'BankOffice',
+    entityIdSource: 'response',
+  })
   @Roles(UserRole.ADMIN)
   @Post('banks/:bankId/offices')
   addOffice(
@@ -68,6 +84,11 @@ export class BanksController {
     return this.banksService.listOffices(bankId);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'BankOffice',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Delete('bank-offices/:id')
   removeOffice(@Param('id', ParseUUIDPipe) id: string) {

@@ -8,8 +8,9 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { LoanApplicationsService } from '../loan-applications/loan-applications.service';
@@ -58,6 +59,12 @@ export class CommissionsController {
   }
 
   /** Преизчислява и записва периода (обемът се мени със задна дата) */
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'Bank',
+    entityIdSource: 'param',
+    entityIdParam: 'bankId',
+  })
   @Roles(UserRole.ADMIN)
   @Post('banks/:bankId/commissions/recalculate')
   recalculate(
@@ -92,6 +99,11 @@ export class CommissionsController {
     );
   }
 
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'TrancheCommission',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('tranche-commissions/:id/status')
   updateTrancheStatus(
@@ -106,6 +118,11 @@ export class CommissionsController {
     );
   }
 
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'BankPeriodBonus',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('bank-period-bonuses/:id/status')
   updateBonusStatus(
@@ -156,6 +173,11 @@ export class CommissionsController {
   }
 
   /** Партньорът може да си предложи дела; ADMIN въвежда направо одобрен */
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(
     UserRole.ADMIN,
     UserRole.CONSULTANT,
@@ -173,6 +195,11 @@ export class CommissionsController {
     return this.partnerCommissionService.propose(id, dto, user);
   }
 
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('loan-applications/:id/partner-commission/approve')
   approvePartnerCommission(
@@ -182,12 +209,22 @@ export class CommissionsController {
     return this.partnerCommissionService.approve(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('loan-applications/:id/partner-commission/reject')
   rejectPartnerCommission(@Param('id', ParseUUIDPipe) id: string) {
     return this.partnerCommissionService.reject(id);
   }
 
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('loan-applications/:id/partner-commission/pay')
   payPartnerCommission(@Param('id', ParseUUIDPipe) id: string) {
@@ -195,6 +232,11 @@ export class CommissionsController {
   }
 
   /** Преизчислява дела при променени данни (обем, процент от банката) */
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'LoanApplication',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('loan-applications/:id/partner-commission/recalculate')
   recalculatePartnerCommission(@Param('id', ParseUUIDPipe) id: string) {
@@ -203,6 +245,11 @@ export class CommissionsController {
 
   // --- Корекции и clawback ---
 
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'CommissionAdjustment',
+    entityIdSource: 'response',
+  })
   @Roles(UserRole.ADMIN)
   @Post('banks/:bankId/commission-adjustments')
   createAdjustment(
@@ -226,6 +273,11 @@ export class CommissionsController {
   }
 
   /** Отбелязва корекцията като приспадната от плащане */
+  @AuditLog({
+    action: AuditAction.COMMISSION_UPDATE,
+    entityType: 'CommissionAdjustment',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch('commission-adjustments/:id/settle')
   settleAdjustment(@Param('id', ParseUUIDPipe) id: string) {

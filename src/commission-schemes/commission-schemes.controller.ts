@@ -9,7 +9,8 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CommissionSchemesService } from './commission-schemes.service';
 import { CreateCommissionSchemeDto } from './dto/create-commission-scheme.dto';
@@ -26,6 +27,11 @@ export class CommissionSchemesController {
     private readonly commissionSchemesService: CommissionSchemesService,
   ) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'CommissionScheme',
+    entityIdSource: 'response',
+  })
   @Post('banks/:bankId/commission-schemes')
   create(
     @Param('bankId', ParseUUIDPipe) bankId: string,
@@ -58,6 +64,11 @@ export class CommissionSchemesController {
     return this.commissionSchemesService.findOne(id);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'CommissionScheme',
+    entityIdSource: 'param',
+  })
   @Patch('commission-schemes/:id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -66,6 +77,11 @@ export class CommissionSchemesController {
     return this.commissionSchemesService.update(id, dto);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'CommissionScheme',
+    entityIdSource: 'param',
+  })
   @Delete('commission-schemes/:id')
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.commissionSchemesService.remove(id);

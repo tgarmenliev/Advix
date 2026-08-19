@@ -8,6 +8,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { AuditAction } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { AuthService } from './auth.service';
@@ -19,6 +21,13 @@ import type { AuthenticatedUser } from './interfaces/jwt-payload.interface';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  @AuditLog({
+    action: AuditAction.LOGIN,
+    entityType: 'User',
+    entityIdSource: 'response',
+    entityIdParam: 'user.id',
+    tenantIdParam: 'user.tenantId',
+  })
   @Public()
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 15 * 60 * 1000 } }) // 5 опита / 15 мин / IP
@@ -28,6 +37,11 @@ export class AuthController {
     return this.authService.login(dto.email, dto.password);
   }
 
+  @AuditLog({
+    action: AuditAction.REFRESH_TOKEN,
+    entityType: 'User',
+    entityIdSource: 'accessTokenClaims',
+  })
   @Public()
   @HttpCode(HttpStatus.OK)
   @Post('refresh')
@@ -35,6 +49,11 @@ export class AuthController {
     return this.authService.refresh(dto.refreshToken);
   }
 
+  @AuditLog({
+    action: AuditAction.LOGOUT,
+    entityType: 'User',
+    entityIdSource: 'currentUser',
+  })
   @HttpCode(HttpStatus.OK)
   @Post('logout')
   async logout(@CurrentUser('userId') userId: string) {

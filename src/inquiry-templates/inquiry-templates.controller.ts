@@ -8,7 +8,8 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CreateInquiryTemplateDto } from './dto/create-inquiry-template.dto';
 import { UpdateInquiryTemplateDto } from './dto/update-inquiry-template.dto';
@@ -28,6 +29,11 @@ export class InquiryTemplatesController {
     private readonly inquiryTemplatesService: InquiryTemplatesService,
   ) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'InquiryTemplate',
+    entityIdSource: 'response',
+  })
   @Roles(UserRole.ADMIN)
   @Post()
   create(@Body() dto: CreateInquiryTemplateDto) {
@@ -49,6 +55,11 @@ export class InquiryTemplatesController {
     return this.inquiryTemplatesService.findOne(id);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'InquiryTemplate',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Patch(':id')
   update(
@@ -58,6 +69,11 @@ export class InquiryTemplatesController {
     return this.inquiryTemplatesService.update(id, dto);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'InquiryTemplate',
+    entityIdSource: 'param',
+  })
   @Roles(UserRole.ADMIN)
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string) {

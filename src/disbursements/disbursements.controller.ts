@@ -8,8 +8,9 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
+import { AuditAction, UserRole } from '@prisma/client';
 import type { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { AuditLog } from '../audit-log/decorators/audit-log.decorator';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { DisbursementsService } from './disbursements.service';
@@ -26,6 +27,11 @@ import { UpdateDisbursementDto } from './dto/update-disbursement.dto';
 export class DisbursementsController {
   constructor(private readonly disbursementsService: DisbursementsService) {}
 
+  @AuditLog({
+    action: AuditAction.CREATE,
+    entityType: 'Disbursement',
+    entityIdSource: 'response',
+  })
   @Post('loan-applications/:id/disbursements')
   create(
     @Param('id', ParseUUIDPipe) id: string,
@@ -43,6 +49,11 @@ export class DisbursementsController {
     return this.disbursementsService.findAllForApplication(id, user);
   }
 
+  @AuditLog({
+    action: AuditAction.UPDATE,
+    entityType: 'Disbursement',
+    entityIdSource: 'param',
+  })
   @Patch('disbursements/:id')
   update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -52,6 +63,11 @@ export class DisbursementsController {
     return this.disbursementsService.update(id, dto, user);
   }
 
+  @AuditLog({
+    action: AuditAction.DELETE,
+    entityType: 'Disbursement',
+    entityIdSource: 'param',
+  })
   @Delete('disbursements/:id')
   remove(
     @Param('id', ParseUUIDPipe) id: string,
