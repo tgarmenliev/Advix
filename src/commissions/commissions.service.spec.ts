@@ -31,7 +31,11 @@ describe('CommissionsService', () => {
       return db;
     },
   };
-  const schemesMock = { resolveActive: jest.fn() };
+  const schemesMock = {
+    resolveActive: jest.fn(),
+    findActiveSchemes: jest.fn(),
+    findOne: jest.fn(),
+  };
   const disbursementsMock = { findForPeriod: jest.fn() };
 
   const tieredScheme = {
@@ -62,6 +66,7 @@ describe('CommissionsService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     schemesMock.resolveActive.mockResolvedValue(tieredScheme);
+    schemesMock.findActiveSchemes.mockResolvedValue([tieredScheme]);
     disbursementsMock.findForPeriod.mockResolvedValue([]);
     trancheCommission.findMany.mockResolvedValue([]);
     commissionRecord.findUnique.mockResolvedValue({ id: 'rec-1' });
@@ -170,10 +175,9 @@ describe('CommissionsService', () => {
       disbursementsMock.findForPeriod.mockResolvedValue([
         disbursementRow('d2', 8_000_000, '2026-04-15'),
       ]);
-      schemesMock.resolveActive.mockResolvedValue({
-        ...tieredScheme,
-        maxPerDealAmount: 100_000,
-      });
+      schemesMock.findActiveSchemes.mockResolvedValue([
+        { ...tieredScheme, maxPerDealAmount: 100_000 },
+      ]);
 
       const result = await service.recalculate(
         'bank-1',
@@ -187,7 +191,7 @@ describe('CommissionsService', () => {
     });
 
     it('липсваща активна схема → 400', async () => {
-      schemesMock.resolveActive.mockResolvedValue(null);
+      schemesMock.findActiveSchemes.mockResolvedValue([]);
 
       await expect(
         service.recalculate(
@@ -201,11 +205,13 @@ describe('CommissionsService', () => {
 
   describe('recalculate — бонус', () => {
     it('записва бонуса на ниво период, не на транш', async () => {
-      schemesMock.resolveActive.mockResolvedValue({
-        ...tieredScheme,
-        schemeType: CommissionSchemeType.BONUS,
-        evaluationMode: CommissionEvaluationMode.END_OF_PERIOD,
-      });
+      schemesMock.findActiveSchemes.mockResolvedValue([
+        {
+          ...tieredScheme,
+          schemeType: CommissionSchemeType.BONUS,
+          evaluationMode: CommissionEvaluationMode.END_OF_PERIOD,
+        },
+      ]);
       disbursementsMock.findForPeriod.mockResolvedValue([
         disbursementRow('d1', 20_000_000, '2026-01-15'),
       ]);
@@ -221,6 +227,152 @@ describe('CommissionsService', () => {
       expect(trancheCommission.upsert).not.toHaveBeenCalled();
       expect(result.affected).toBe(1);
       expect(result.total).toBe(200_000); // 200к × 1,0%
+    });
+  });
+
+  /**
+   * Ръчен избор на схема — за банка+вид+категория с повече от една активна
+   * схема (бизнес подкатегории). Без изричен schemeId, две активни схеми
+   * трябва да гръмнат с ясен списък за избор, а не да се сумират безсмислено.
+   */
+  describe('resolveScheme (ambiguity / ръчен избор)', () => {
+    const schemeA = {
+      ...tieredScheme,
+      id: 'scheme-A',
+      bankId: 'bank-1',
+      schemeType: CommissionSchemeType.COMMISSION,
+      loanCategory: CommissionLoanCategory.BUSINESS,
+      label: 'Кредитна линия',
+      validFrom: new Date('2026-01-01'),
+      validTo: null,
+    };
+    const schemeB = {
+      ...tieredScheme,
+      id: 'scheme-B',
+      bankId: 'bank-1',
+      schemeType: CommissionSchemeType.COMMISSION,
+      loanCategory: CommissionLoanCategory.BUSINESS,
+      label: 'Инсталментни кредити',
+      validFrom: new Date('2026-01-01'),
+      validTo: null,
+    };
+
+    it('две активни схеми без schemeId → 400 със списък за избор', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue([schemeA, schemeB]);
+
+      const error = await service
+        .recalculate(
+          'bank-1',
+          CommissionLoanCategory.BUSINESS,
+          CommissionSchemeType.COMMISSION,
+          new Date('2026-02-20'),
+        )
+        .catch((e: BadRequestException) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toEqual(
+        expect.objectContaining({
+          schemes: [
+            { id: 'scheme-A', label: 'Кредитна линия' },
+            { id: 'scheme-B', label: 'Инсталментни кредити' },
+          ],
+        }),
+      );
+    });
+
+    it('с изричен schemeId — използва точно тази схема и филтрира по нейния label', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue([schemeA, schemeB]);
+      schemesMock.findOne.mockResolvedValue(schemeA);
+      disbursementsMock.findForPeriod.mockResolvedValue([]);
+
+      await service.preview(
+        'bank-1',
+        CommissionLoanCategory.BUSINESS,
+        CommissionSchemeType.COMMISSION,
+        new Date('2026-02-20'),
+        'scheme-A',
+      );
+
+      expect(disbursementsMock.findForPeriod).toHaveBeenCalledWith(
+        'bank-1',
+        CommissionLoanCategory.BUSINESS,
+        expect.anything(),
+        'Кредитна линия',
+      );
+    });
+
+    it('schemeId от друга банка/категория → 400', async () => {
+      schemesMock.findOne.mockResolvedValue({
+        ...schemeA,
+        bankId: 'ДРУГА-банка',
+      });
+
+      await expect(
+        service.preview(
+          'bank-1',
+          CommissionLoanCategory.BUSINESS,
+          CommissionSchemeType.COMMISSION,
+          new Date('2026-02-20'),
+          'scheme-A',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('schemeId, неактивен към датата → 400', async () => {
+      schemesMock.findOne.mockResolvedValue({
+        ...schemeA,
+        validTo: new Date('2026-01-15'), // изтекла преди датата на изчислението
+      });
+
+      await expect(
+        service.preview(
+          'bank-1',
+          CommissionLoanCategory.BUSINESS,
+          CommissionSchemeType.COMMISSION,
+          new Date('2026-02-20'),
+          'scheme-A',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('една активна схема — работи автоматично без schemeId (непроменено поведение)', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue([schemeA]);
+      disbursementsMock.findForPeriod.mockResolvedValue([]);
+
+      const result = await service.preview(
+        'bank-1',
+        CommissionLoanCategory.BUSINESS,
+        CommissionSchemeType.COMMISSION,
+        new Date('2026-02-20'),
+      );
+
+      expect(result.schemeId).toBe('scheme-A');
+      expect(disbursementsMock.findForPeriod).toHaveBeenCalledWith(
+        'bank-1',
+        CommissionLoanCategory.BUSINESS,
+        expect.anything(),
+        'Кредитна линия',
+      );
+    });
+  });
+
+  describe('listActiveSchemes', () => {
+    it('връща id и label на активните схеми (за picker-а на консултанта)', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue([
+        { id: 's1', label: 'Линии', basis: CommissionBasis.FLAT_PERCENT },
+        { id: 's2', label: null, basis: CommissionBasis.VOLUME_TIERED },
+      ]);
+
+      const result = await service.listActiveSchemes(
+        'bank-1',
+        CommissionSchemeType.COMMISSION,
+        CommissionLoanCategory.BUSINESS,
+      );
+
+      expect(result).toEqual([
+        { id: 's1', label: 'Линии', basis: CommissionBasis.FLAT_PERCENT },
+        { id: 's2', label: null, basis: CommissionBasis.VOLUME_TIERED },
+      ]);
     });
   });
 

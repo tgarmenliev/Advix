@@ -53,6 +53,7 @@ export class CommissionsController {
       query.loanCategory,
       query.schemeType,
       query.at ? new Date(query.at) : undefined,
+      query.schemeId,
     );
   }
 
@@ -67,6 +68,26 @@ export class CommissionsController {
       bankId,
       query.loanCategory,
       query.schemeType,
+      query.at ? new Date(query.at) : undefined,
+      query.schemeId,
+    );
+  }
+
+  /**
+   * Активните схеми за банка+вид+категория — ползва се, когато преглед/
+   * преизчисление гръмне с "ambiguous, specify schemeId", за да покаже
+   * консултантът от какво да избере (label-ите).
+   */
+  @Roles(UserRole.ADMIN)
+  @Get('banks/:bankId/commissions/active-schemes')
+  listActiveSchemes(
+    @Param('bankId', ParseUUIDPipe) bankId: string,
+    @Query() query: PeriodQueryDto,
+  ) {
+    return this.commissionsService.listActiveSchemes(
+      bankId,
+      query.schemeType,
+      query.loanCategory,
       query.at ? new Date(query.at) : undefined,
     );
   }

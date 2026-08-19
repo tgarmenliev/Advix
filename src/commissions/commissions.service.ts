@@ -10,7 +10,10 @@ import {
   CommissionStatus,
   TrancheCommission,
 } from '@prisma/client';
-import { CommissionSchemesService } from '../commission-schemes/commission-schemes.service';
+import {
+  CommissionSchemesService,
+  SchemeWithTiers,
+} from '../commission-schemes/commission-schemes.service';
 import {
   CalendarPeriod,
   calendarPeriod,
@@ -58,23 +61,29 @@ export class CommissionsService {
   /**
    * Преизчислява и записва комисионите (или бонуса) за банка, категория и
    * периода, в който попада подадената дата.
+   *
+   * @param schemeId Ръчен избор на схема — задължителен, когато банката има
+   *        повече от една активна схема за тази категория+вид (напр. бизнес
+   *        подкатегории). При една активна схема се резолва автоматично.
    */
   async recalculate(
     bankId: string,
     loanCategory: CommissionLoanCategory,
     schemeType: CommissionSchemeType,
     at: Date = new Date(),
+    schemeId?: string,
   ): Promise<RecalculationResult> {
     const { scheme, period, calculation } = await this.computePeriod(
       bankId,
       loanCategory,
       schemeType,
       at,
+      schemeId,
     );
 
     const affected =
       schemeType === CommissionSchemeType.BONUS
-        ? await this.persistBonus(bankId, loanCategory, period, calculation)
+        ? await this.persistBonus(bankId, loanCategory, scheme.label, period, calculation)
         : await this.persistCommissions(calculation);
 
     return {
@@ -94,25 +103,53 @@ export class CommissionsService {
     loanCategory: CommissionLoanCategory,
     schemeType: CommissionSchemeType,
     at: Date = new Date(),
+    schemeId?: string,
   ) {
     const { scheme, period, calculation } = await this.computePeriod(
       bankId,
       loanCategory,
       schemeType,
       at,
+      schemeId,
     );
     return {
       period,
       schemeId: scheme.id,
+      label: scheme.label,
       basis: scheme.basis,
       evaluationMode: scheme.evaluationMode,
       volume: calculation.volume,
+      dealCount: calculation.dealCount,
       appliedPercent: calculation.appliedPercent,
       tier: calculation.tier,
       total: calculation.total,
       lines: calculation.lines,
       monthlyBreakdown: calculation.monthlyBreakdown,
     };
+  }
+
+  /**
+   * Активните схеми за банка+вид+категория — за да избере консултантът кога
+   * има повече от една (бизнес подкатегории). Празен списък или единствен
+   * елемент означава, че ръчен избор не е нужен.
+   */
+  async listActiveSchemes(
+    bankId: string,
+    schemeType: CommissionSchemeType,
+    loanCategory: CommissionLoanCategory,
+    at: Date = new Date(),
+  ) {
+    const schemes = await this.schemesService.findActiveSchemes(
+      bankId,
+      schemeType,
+      loanCategory,
+      at,
+    );
+    return schemes.map((s) => ({
+      id: s.id,
+      label: s.label,
+      basis: s.basis,
+    }));
   }
 
   /** Отбелязва начислена/получена комисиона по транш. */
@@ -201,27 +238,34 @@ export class CommissionsService {
 
   // ---------------------------------------------------------------------------
 
+  /**
+   * Резолвира коя схема да се приложи и смята периода за нея.
+   *
+   * Ако е подаден `schemeId`, тя се използва директно (след проверка, че
+   * действително принадлежи на банка+вид+категория и важи към датата). Иначе:
+   * при точно една активна схема — резолва се автоматично (обичайният случай
+   * — MORTGAGE/CONSUMER имат само по една); при повече от една — искаме
+   * изричен избор, защото различните схеми са различни продукти на банката
+   * (виж CommissionScheme.label) и не могат да се сумират безсмислено.
+   */
   private async computePeriod(
     bankId: string,
     loanCategory: CommissionLoanCategory,
     schemeType: CommissionSchemeType,
     at: Date,
+    schemeId?: string,
   ): Promise<{
-    scheme: Awaited<ReturnType<CommissionSchemesService['resolveActive']>> & object;
+    scheme: SchemeWithTiers;
     period: CalendarPeriod;
     calculation: PeriodCalculation;
   }> {
-    const scheme = await this.schemesService.resolveActive(
+    const scheme = await this.resolveScheme(
       bankId,
-      schemeType,
       loanCategory,
+      schemeType,
       at,
+      schemeId,
     );
-    if (!scheme) {
-      throw new BadRequestException(
-        `No active ${schemeType} scheme for ${loanCategory} at ${at.toISOString().slice(0, 10)}`,
-      );
-    }
 
     // Фиксираният процент не зависи от обем — отчита се месечно за нуждите на
     // справките
@@ -230,10 +274,14 @@ export class CommissionsService {
       scheme.periodType ?? CommissionPeriodType.MONTHLY,
     );
 
+    // Когато схемата има label (бизнес подкатегория), траншовете се стесняват
+    // до точно този продукт — иначе биха се смесили с друг паралелен продукт
+    // на същата банка/категория
     const disbursements = await this.disbursementsService.findForPeriod(
       bankId,
       loanCategory,
       period,
+      scheme.label ?? undefined,
     );
 
     const inputs = disbursements.map((d) => ({
@@ -258,6 +306,54 @@ export class CommissionsService {
         prior,
       ),
     };
+  }
+
+  private async resolveScheme(
+    bankId: string,
+    loanCategory: CommissionLoanCategory,
+    schemeType: CommissionSchemeType,
+    at: Date,
+    schemeId?: string,
+  ): Promise<SchemeWithTiers> {
+    if (schemeId) {
+      const scheme = await this.schemesService.findOne(schemeId);
+      if (
+        scheme.bankId !== bankId ||
+        scheme.schemeType !== schemeType ||
+        scheme.loanCategory !== loanCategory
+      ) {
+        throw new BadRequestException(
+          'The specified scheme does not match this bank, scheme type or loan category',
+        );
+      }
+      if (scheme.validFrom > at || (scheme.validTo && scheme.validTo <= at)) {
+        throw new BadRequestException(
+          `The specified scheme is not active on ${at.toISOString().slice(0, 10)}`,
+        );
+      }
+      return scheme;
+    }
+
+    const active = await this.schemesService.findActiveSchemes(
+      bankId,
+      schemeType,
+      loanCategory,
+      at,
+    );
+    if (active.length === 0) {
+      throw new BadRequestException(
+        `No active ${schemeType} scheme for ${loanCategory} at ${at.toISOString().slice(0, 10)}`,
+      );
+    }
+    if (active.length > 1) {
+      throw new BadRequestException({
+        message:
+          `This bank has ${active.length} active ${schemeType} schemes for ` +
+          `${loanCategory} — specify schemeId`,
+        schemes: active.map((s) => ({ id: s.id, label: s.label })),
+      });
+    }
+    return active[0];
   }
 
   /**
@@ -322,20 +418,25 @@ export class CommissionsService {
   private async persistBonus(
     bankId: string,
     loanCategory: CommissionLoanCategory,
+    schemeLabel: string | null,
     period: CalendarPeriod,
     calculation: PeriodCalculation,
   ): Promise<number> {
+    // label е NOT NULL с default('') в базата — виж коментара в schema.prisma
+    // защо null не може да участва в @@unique надеждно
+    const label = schemeLabel ?? '';
     const key = {
       bankId,
       loanCategory,
       periodType: period.type,
       periodYear: period.year,
       periodIndex: period.index,
+      label,
     };
 
     await this.db.bankPeriodBonus.upsert({
       where: {
-        bankId_loanCategory_periodType_periodYear_periodIndex: key,
+        bankId_loanCategory_periodType_periodYear_periodIndex_label: key,
       },
       update: {
         volume: calculation.volume,
