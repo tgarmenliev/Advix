@@ -6,12 +6,18 @@ import {
 } from '@nestjs/common';
 import {
   CommissionLoanCategory,
+  CommissionSchemeType,
   Disbursement,
   LoanStatus,
+  LoanType,
   OfferStatus,
 } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
-import { commissionCategoryToLoanTypes } from '../commission-schemes/loan-category.util';
+import { CommissionSchemesService } from '../commission-schemes/commission-schemes.service';
+import {
+  commissionCategoryToLoanTypes,
+  loanTypeToCommissionCategory,
+} from '../commission-schemes/loan-category.util';
 import { CalendarPeriod } from '../commission-schemes/period.util';
 import { PrismaService } from '../database/prisma.service';
 import { LoanApplicationsService } from '../loan-applications/loan-applications.service';
@@ -45,6 +51,7 @@ export class DisbursementsService {
   constructor(
     private readonly prismaService: PrismaService,
     private readonly loanApplicationsService: LoanApplicationsService,
+    private readonly schemesService: CommissionSchemesService,
   ) {}
 
   private get db() {
@@ -76,6 +83,13 @@ export class DisbursementsService {
     }
 
     const offer = await this.findActiveOffer(applicationId);
+    const disbursedAt = new Date(dto.disbursedAt);
+    const commissionLabel = await this.resolveDisbursementLabel(
+      offer.bankId,
+      application.loanType,
+      disbursedAt,
+      dto.commissionLabel,
+    );
 
     const existing = await this.db.disbursement.findMany({
       where: { offerId: offer.id },
@@ -97,7 +111,8 @@ export class DisbursementsService {
         offerId: offer.id,
         trancheNumber,
         amount: dto.amount,
-        disbursedAt: new Date(dto.disbursedAt),
+        disbursedAt,
+        commissionLabel,
       },
     });
 
@@ -185,38 +200,29 @@ export class DisbursementsService {
     bankId: string,
     category: CommissionLoanCategory,
     period: CalendarPeriod,
+    label?: string | null,
   ): Promise<number> {
     const result = await this.db.disbursement.aggregate({
       _sum: { amount: true },
-      where: {
-        disbursedAt: { gte: period.startsAt, lt: period.endsAt },
-        offer: {
-          bankId,
-          loanApplication: {
-            loanType: { in: commissionCategoryToLoanTypes(category) },
-          },
-        },
-      },
+      where: this.periodWhere(bankId, category, period, label),
     });
     return result._sum.amount ?? 0;
   }
 
-  /** Траншовете за банка/категория/период — за преизчисляване на комисиони. */
+  /**
+   * Траншовете за банка/категория/период — за преизчисляване на комисиони.
+   * `label` стеснява до един продукт (виж resolveDisbursementLabel); когато е
+   * `undefined`, връща всички траншове за категорията независимо от продукта
+   * (коректно само когато банката има само една активна схема).
+   */
   async findForPeriod(
     bankId: string,
     category: CommissionLoanCategory,
     period: CalendarPeriod,
+    label?: string | null,
   ) {
     return this.db.disbursement.findMany({
-      where: {
-        disbursedAt: { gte: period.startsAt, lt: period.endsAt },
-        offer: {
-          bankId,
-          loanApplication: {
-            loanType: { in: commissionCategoryToLoanTypes(category) },
-          },
-        },
-      },
+      where: this.periodWhere(bankId, category, period, label),
       include: {
         commission: true,
         offer: { select: { id: true, bankId: true, loanApplicationId: true } },
@@ -226,6 +232,63 @@ export class DisbursementsService {
   }
 
   // ---------------------------------------------------------------------------
+
+  private periodWhere(
+    bankId: string,
+    category: CommissionLoanCategory,
+    period: CalendarPeriod,
+    label?: string | null,
+  ) {
+    return {
+      disbursedAt: { gte: period.startsAt, lt: period.endsAt },
+      ...(label !== undefined ? { commissionLabel: label } : {}),
+      offer: {
+        bankId,
+        loanApplication: {
+          loanType: { in: commissionCategoryToLoanTypes(category) },
+        },
+      },
+    };
+  }
+
+  /**
+   * Определя с кой продуктов етикет да се запечата траншът.
+   *
+   * Ако банката има повече от една активна COMMISSION схема за категорията на
+   * заявката към датата на усвояване, ЕТИКЕТЪТ Е ЗАДЪЛЖИТЕЛЕН — трябва да
+   * съвпада с label на една от тях (консултантът винаги знае кой точно
+   * продукт е сделката — това не се отгатва). При една или нула активни
+   * схеми, етикетът е свободен (пази се, ако е подаден, но не се изисква).
+   */
+  private async resolveDisbursementLabel(
+    bankId: string,
+    loanType: LoanType,
+    at: Date,
+    providedLabel?: string,
+  ): Promise<string | null> {
+    const category = loanTypeToCommissionCategory(loanType);
+    const activeSchemes = await this.schemesService.findActiveSchemes(
+      bankId,
+      CommissionSchemeType.COMMISSION,
+      category,
+      at,
+    );
+
+    if (activeSchemes.length <= 1) {
+      return providedLabel ?? null;
+    }
+
+    const labels = activeSchemes.map((s) => s.label).filter((l) => l !== null);
+    if (!providedLabel || !labels.includes(providedLabel)) {
+      throw new BadRequestException({
+        message:
+          `This bank has ${activeSchemes.length} active commission schemes for ` +
+          `${category} — specify commissionLabel matching one of them`,
+        availableLabels: labels,
+      });
+    }
+    return providedLabel;
+  }
 
   private async loadApplication(
     applicationId: string,

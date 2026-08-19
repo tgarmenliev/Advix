@@ -13,6 +13,7 @@ import {
   UserRole,
 } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/interfaces/jwt-payload.interface';
+import { CommissionSchemesService } from '../commission-schemes/commission-schemes.service';
 import { periodByIndex } from '../commission-schemes/period.util';
 import { PrismaService } from '../database/prisma.service';
 import { LoanApplicationsService } from '../loan-applications/loan-applications.service';
@@ -39,6 +40,9 @@ describe('DisbursementsService', () => {
     },
   };
   const loanAppsMock = { assertAccessById: jest.fn() };
+  // По подразбиране нула активни схеми → без изискване за commissionLabel
+  // (единственият/обичайният случай, който повечето тестове тук покриват)
+  const schemesMock = { findActiveSchemes: jest.fn() };
 
   const consultant: AuthenticatedUser = {
     userId: 'consultant-1',
@@ -57,6 +61,7 @@ describe('DisbursementsService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     loanAppsMock.assertAccessById.mockResolvedValue(undefined);
+    schemesMock.findActiveSchemes.mockResolvedValue([]);
     loanApplication.findUnique.mockResolvedValue(approvedApp);
     bankOffer.findFirst.mockResolvedValue({
       id: 'offer-1',
@@ -73,6 +78,7 @@ describe('DisbursementsService', () => {
         DisbursementsService,
         { provide: PrismaService, useValue: prismaMock },
         { provide: LoanApplicationsService, useValue: loanAppsMock },
+        { provide: CommissionSchemesService, useValue: schemesMock },
       ],
     }).compile();
     service = moduleRef.get(DisbursementsService);
@@ -180,6 +186,96 @@ describe('DisbursementsService', () => {
       // Само консултантът решава кой транш е последният
       expect(loanApplication.findUnique).toHaveBeenCalled();
       expect(disbursement.create).toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Когато банката има повече от една активна COMMISSION схема за категорията
+   * на заявката (бизнес подкатегории), траншът ТРЯБВА да е тагнат с
+   * commissionLabel — иначе не може да се разпредели правилно при агрегация.
+   */
+  describe('create — commissionLabel при няколко активни схеми', () => {
+    const twoActiveSchemes = [
+      { id: 's1', label: 'Кредитна линия' },
+      { id: 's2', label: 'Инсталментни кредити' },
+    ];
+
+    it('без label при две активни схеми → 400 със списък от label-и', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue(twoActiveSchemes);
+
+      const error = await service
+        .create('app-1', { amount: 1000, disbursedAt: '2026-05-10' }, consultant)
+        .catch((e: BadRequestException) => e);
+
+      expect(error).toBeInstanceOf(BadRequestException);
+      expect((error as BadRequestException).getResponse()).toEqual(
+        expect.objectContaining({
+          availableLabels: ['Кредитна линия', 'Инсталментни кредити'],
+        }),
+      );
+      expect(disbursement.create).not.toHaveBeenCalled();
+    });
+
+    it('с label, съвпадащ с една от активните схеми → приема се', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue(twoActiveSchemes);
+
+      await service.create(
+        'app-1',
+        {
+          amount: 1000,
+          disbursedAt: '2026-05-10',
+          commissionLabel: 'Кредитна линия',
+        },
+        consultant,
+      );
+
+      expect(disbursement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ commissionLabel: 'Кредитна линия' }),
+      });
+    });
+
+    it('с label, който не съвпада с никоя активна схема → 400', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue(twoActiveSchemes);
+
+      await expect(
+        service.create(
+          'app-1',
+          {
+            amount: 1000,
+            disbursedAt: '2026-05-10',
+            commissionLabel: 'Несъществуващ продукт',
+          },
+          consultant,
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('при ЕДНА активна схема label не е задължителен', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue([twoActiveSchemes[0]]);
+
+      await service.create(
+        'app-1',
+        { amount: 1000, disbursedAt: '2026-05-10' },
+        consultant,
+      );
+
+      expect(disbursement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ commissionLabel: null }),
+      });
+    });
+
+    it('при нула активни схеми label не е задължителен', async () => {
+      schemesMock.findActiveSchemes.mockResolvedValue([]);
+
+      await service.create(
+        'app-1',
+        { amount: 1000, disbursedAt: '2026-05-10' },
+        consultant,
+      );
+
+      expect(disbursement.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ commissionLabel: null }),
+      });
     });
   });
 
