@@ -2,6 +2,7 @@ import {
   MiddlewareConsumer,
   Module,
   NestModule,
+  RequestMethod,
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -30,6 +31,8 @@ import { HealthController } from './health/health.controller';
 import { InquiryTemplatesModule } from './inquiry-templates/inquiry-templates.module';
 import { LoanApplicationsModule } from './loan-applications/loan-applications.module';
 import { PropertiesModule } from './properties/properties.module';
+import { SecureLinkMiddleware } from './secure-links/secure-link.middleware';
+import { SecureLinksModule } from './secure-links/secure-links.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { UsersModule } from './users/users.module';
 
@@ -58,6 +61,7 @@ import { UsersModule } from './users/users.module';
     CommissionSchemesModule,
     DisbursementsModule,
     CommissionsModule,
+    SecureLinksModule,
   ],
   controllers: [HealthController],
   providers: [
@@ -79,5 +83,19 @@ export class AppModule implements NestModule {
       .apply(TenantMiddleware)
       .exclude(...PUBLIC_ROUTES)
       .forRoutes('{*splat}');
+
+    // Secure Link маршрутите отварят tenant контекста сами (гол токен в
+    // URL-а, не JWT) — виж SecureLinkMiddleware.
+    consumer
+      .apply(SecureLinkMiddleware)
+      .forRoutes(
+        { path: 'secure/:token', method: RequestMethod.GET },
+        { path: 'secure/:token/profile', method: RequestMethod.PATCH },
+        {
+          path: 'secure/:token/offers/:offerId/select',
+          method: RequestMethod.POST,
+        },
+        { path: 'secure/:token/gdpr-consent', method: RequestMethod.POST },
+      );
   }
 }

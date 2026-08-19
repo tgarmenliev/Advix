@@ -1,6 +1,8 @@
 export interface AppConfig {
   nodeEnv: string;
   port: number;
+  // Базов URL, върху който се строят Secure Link адресите в имейлите
+  appBaseUrl: string;
   database: {
     url: string;
   };
@@ -30,6 +32,7 @@ export interface AppConfig {
 export default (): AppConfig => ({
   nodeEnv: process.env.NODE_ENV ?? 'development',
   port: parseInt(process.env.PORT ?? '3000', 10),
+  appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:3000',
   database: {
     url: process.env.DATABASE_URL!,
   },

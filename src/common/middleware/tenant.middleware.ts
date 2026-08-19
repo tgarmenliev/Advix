@@ -20,8 +20,15 @@ export const PUBLIC_ROUTES: RouteInfo[] = [
   { path: 'auth/login', method: RequestMethod.POST },
   { path: 'auth/refresh', method: RequestMethod.POST },
   { path: 'health', method: RequestMethod.GET },
-  // Secure Links — фаза 9
+  // Secure Links — SecureLinkMiddleware отваря tenant контекста вместо
+  // TenantMiddleware (гол токен в URL-а, не JWT); виж secure-links модула.
   { path: 'secure/:token', method: RequestMethod.GET },
+  { path: 'secure/:token/profile', method: RequestMethod.PATCH },
+  {
+    path: 'secure/:token/offers/:offerId/select',
+    method: RequestMethod.POST,
+  },
+  { path: 'secure/:token/gdpr-consent', method: RequestMethod.POST },
 ];
 
 /**

@@ -462,6 +462,39 @@ export class LoanApplicationsService {
     currentUser: AuthenticatedUser,
   ): Promise<LoanApplication> {
     const application = await this.loadOwned(id, currentUser);
+    return this.transitionToOfferSelected(
+      application,
+      currentUser.userId,
+      'Избрана оферта',
+    );
+  }
+
+  /**
+   * Използва се от Secure Link потока — клиентът избира сам, без JWT
+   * потребител. Собствеността вече е проверена от SecureLinksService срещу
+   * link-а (loanApplicationId), не срещу ролево видимо досие.
+   */
+  async markOfferSelectedForSecureLink(
+    applicationId: string,
+  ): Promise<LoanApplication> {
+    const application = await this.db.loanApplication.findUnique({
+      where: { id: applicationId },
+    });
+    if (!application) {
+      throw new NotFoundException('Loan application not found');
+    }
+    return this.transitionToOfferSelected(
+      application,
+      null,
+      'Избрана оферта (клиентски достъп през Secure Link)',
+    );
+  }
+
+  private async transitionToOfferSelected(
+    application: LoanApplication,
+    changedByUserId: string | null,
+    note: string,
+  ): Promise<LoanApplication> {
     if (application.status === LoanStatus.OFFER_SELECTED) {
       return application;
     }
@@ -472,16 +505,16 @@ export class LoanApplicationsService {
     }
     const [updated] = await this.db.$transaction([
       this.db.loanApplication.update({
-        where: { id },
+        where: { id: application.id },
         data: { status: LoanStatus.OFFER_SELECTED },
       }),
       this.db.loanStatusHistory.create({
         data: {
-          loanApplicationId: id,
+          loanApplicationId: application.id,
           fromStatus: application.status,
           toStatus: LoanStatus.OFFER_SELECTED,
-          changedByUserId: currentUser.userId,
-          note: 'Избрана оферта',
+          changedByUserId,
+          note,
         },
       }),
     ]);
@@ -992,6 +1025,24 @@ export class LoanApplicationsService {
     application: LoanApplication,
     client: Client,
   ): void {
+    const missing = this.getMissingReadyForBankFields(application, client);
+    if (missing.length > 0) {
+      throw new BadRequestException({
+        message: 'Missing required fields for READY_FOR_BANK',
+        missingFields: missing,
+      });
+    }
+  }
+
+  /**
+   * Кои задължителни полета липсват преди READY_FOR_BANK — без да хвърля.
+   * Преизползва се и от Secure Link "какво остава да попълни клиентът" изгледа,
+   * за да няма два различни списъка с изисквания, които могат да се разминат.
+   */
+  getMissingReadyForBankFields(
+    application: Pick<LoanApplication, 'amount' | 'termMonths'>,
+    client: Pick<Client, 'egn' | 'netSalary' | 'contractType' | 'gdprConsentAt'>,
+  ): string[] {
     const missing: string[] = [];
     if (!client.egn) missing.push('client.egn');
     if (client.netSalary == null) missing.push('client.netSalary');
@@ -1001,12 +1052,6 @@ export class LoanApplicationsService {
     if (application.termMonths == null) {
       missing.push('loanApplication.termMonths');
     }
-
-    if (missing.length > 0) {
-      throw new BadRequestException({
-        message: 'Missing required fields for READY_FOR_BANK',
-        missingFields: missing,
-      });
-    }
+    return missing;
   }
 }

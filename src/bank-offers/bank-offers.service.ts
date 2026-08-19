@@ -92,6 +92,17 @@ export class BankOffersService {
     });
   }
 
+  /** Използва се от Secure Link потока — собствеността е самият линк. */
+  async findAllForApplicationSecureLink(
+    applicationId: string,
+  ): Promise<Array<BankOffer & { bank: { id: string; name: string } }>> {
+    return this.db.bankOffer.findMany({
+      where: { loanApplicationId: applicationId },
+      include: { bank: { select: { id: true, name: true } } },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
   async findAllForApplication(
     applicationId: string,
     currentUser: AuthenticatedUser,
@@ -180,6 +191,44 @@ export class BankOffersService {
       });
       const selected = await tx.bankOffer.update({
         where: { id },
+        data: { status: OfferStatus.SELECTED },
+      });
+      return { selected, rejected: count };
+    });
+  }
+
+  /**
+   * Използва се от Secure Link потока. Собствеността се проверява директно
+   * срещу loanApplicationId-то на самия линк — НЕ през findOne()/JWT-ролева
+   * видимост, която никога не е била писана за CLIENT.
+   */
+  async selectForSecureLink(
+    offerId: string,
+    loanApplicationId: string,
+  ): Promise<{ selected: BankOffer; rejected: number }> {
+    const offer = await this.db.bankOffer.findUnique({
+      where: { id: offerId },
+    });
+    // Не разграничаваме "не съществува" от "принадлежи на друга заявка" —
+    // и двете връщат същата грешка, за да не изтича информация през токена.
+    if (!offer || offer.loanApplicationId !== loanApplicationId) {
+      throw new NotFoundException('Bank offer not found');
+    }
+
+    await this.loanApplicationsService.markOfferSelectedForSecureLink(
+      loanApplicationId,
+    );
+
+    return this.db.$transaction(async (tx) => {
+      const { count } = await tx.bankOffer.updateMany({
+        where: {
+          loanApplicationId,
+          id: { not: offerId },
+        },
+        data: { status: OfferStatus.REJECTED },
+      });
+      const selected = await tx.bankOffer.update({
+        where: { id: offerId },
         data: { status: OfferStatus.SELECTED },
       });
       return { selected, rejected: count };
