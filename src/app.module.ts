@@ -7,6 +7,7 @@ import {
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_PIPE } from '@nestjs/core';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { AuditLogModule } from './audit-log/audit-log.module';
 import { AuthModule } from './auth/auth.module';
 import { BankInquiriesModule } from './bank-inquiries/bank-inquiries.module';
 import { BankOffersModule } from './bank-offers/bank-offers.module';
@@ -43,6 +44,7 @@ import { UsersModule } from './users/users.module';
     ThrottlerModule.forRoot([{ ttl: 15 * 60 * 1000, limit: 5 }]),
     DatabaseModule,
     AuthModule,
+    AuditLogModule,
     TenantsModule,
     ClientsModule,
     FamilyMembersModule,
