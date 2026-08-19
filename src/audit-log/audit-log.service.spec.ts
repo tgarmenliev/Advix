@@ -124,6 +124,37 @@ describe('AuditLogService', () => {
         }),
       );
     });
+
+    it('secureLink контекст (клиент без User) — userId=null, secureLinkId попълнен', async () => {
+      const options: AuditLogOptions = {
+        action: 'UPDATE' as AuditLogOptions['action'],
+        entityType: 'Client',
+        entityIdSource: 'secureLinkSubject',
+      };
+      await service.record({
+        options,
+        request,
+        currentUser: undefined,
+        secureLink: {
+          id: 'link-1',
+          clientId: 'client-1',
+          familyMemberId: null,
+          loanApplicationId: 'app-1',
+        },
+        preloadedEntityId: 'client-1',
+        oldState: null,
+        responseBody: {},
+      });
+
+      expect(auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId: null,
+          secureLinkId: 'link-1',
+          entityId: 'client-1',
+          entityType: 'Client',
+        }),
+      });
+    });
   });
 
   describe('record — маршрути без активен tenant контекст (login/refresh)', () => {

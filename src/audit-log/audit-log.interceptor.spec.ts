@@ -13,12 +13,15 @@ describe('AuditLogInterceptor', () => {
     record: jest.fn(),
   } as unknown as AuditLogService;
 
-  const makeContext = (params: Record<string, string> = {}): ExecutionContext =>
+  const makeContext = (
+    params: Record<string, string> = {},
+    extra: Record<string, unknown> = {},
+  ): ExecutionContext =>
     ({
       getType: () => 'http',
       getHandler: () => jest.fn(),
       switchToHttp: () => ({
-        getRequest: () => ({ params, user: undefined }),
+        getRequest: () => ({ params, user: undefined, ...extra }),
       }),
     }) as unknown as ExecutionContext;
 
@@ -77,6 +80,33 @@ describe('AuditLogInterceptor', () => {
 
     expect(auditLogService.snapshot).not.toHaveBeenCalled();
     expect(auditLogService.record).toHaveBeenCalled();
+  });
+
+  it("entityIdSource='secureLinkSubject' — извежда entityType/entityId динамично от secureLinkContext", async () => {
+    const options: AuditLogOptions = {
+      action: 'UPDATE' as AuditLogOptions['action'],
+      entityIdSource: 'secureLinkSubject',
+    };
+    (reflector.get as jest.Mock).mockReturnValue(options);
+    (auditLogService.snapshot as jest.Mock).mockResolvedValue({
+      firstName: 'стар',
+    });
+    (auditLogService.record as jest.Mock).mockResolvedValue(undefined);
+
+    const context = makeContext(
+      {},
+      { secureLinkContext: { id: 'link-1', clientId: 'client-1', familyMemberId: null, loanApplicationId: 'app-1' } },
+    );
+    const result$ = await interceptor.intercept(context, makeHandler({ id: 'client-1' }));
+    await firstValueFrom(result$);
+
+    expect(auditLogService.snapshot).toHaveBeenCalledWith('Client', 'client-1');
+    expect(auditLogService.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({ entityType: 'Client' }),
+        preloadedEntityId: 'client-1',
+      }),
+    );
   });
 
   it('грешка при record() е best-effort — не чупи отговора към клиента', async () => {

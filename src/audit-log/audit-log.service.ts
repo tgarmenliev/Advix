@@ -7,6 +7,7 @@ import type {
   JwtAccessPayload,
 } from '../auth/interfaces/jwt-payload.interface';
 import { PrismaService } from '../database/prisma.service';
+import type { SecureLinkRequestContext } from '../secure-links/interfaces/secure-link-context.interface';
 import { AuditLogOptions } from './decorators/audit-log.decorator';
 import { ListAuditLogsQueryDto } from './dto/list-audit-logs-query.dto';
 import { getPath } from './util/get-path.util';
@@ -24,7 +25,8 @@ export interface AuditRecordParams {
   options: AuditLogOptions;
   request: Request;
   currentUser?: AuthenticatedUser;
-  /** entityId, ако вече е известен преди handler-а ('param' / 'currentUser'). */
+  secureLink?: SecureLinkRequestContext;
+  /** entityId, ако вече е известен преди handler-а ('param' / 'currentUser' / 'secureLinkSubject'). */
   preloadedEntityId?: string;
   oldState: unknown;
   responseBody: unknown;
@@ -72,7 +74,8 @@ export class AuditLogService {
    * всяка грешка оттук и никога не я пропуска към клиента.
    */
   async record(params: AuditRecordParams): Promise<void> {
-    const { options, request, currentUser, oldState, responseBody } = params;
+    const { options, request, currentUser, secureLink, oldState, responseBody } =
+      params;
     let entityId = params.preloadedEntityId;
 
     if (options.entityIdSource === 'response') {
@@ -80,11 +83,17 @@ export class AuditLogService {
     }
 
     let userId: string | undefined;
+    let secureLinkId: string | undefined;
     let db: PrismaClient;
 
     if (currentUser) {
       // Нормален, вече tenant-скопиран маршрут — AuditLog живее само в tenant schema.
       userId = currentUser.userId;
+      db = this.prisma.tenantDb;
+    } else if (secureLink) {
+      // Клиент/съдлъжник през Secure Link — няма User, контекстът вече е
+      // отворен от SecureLinkMiddleware, независимо от entityIdSource.
+      secureLinkId = secureLink.id;
       db = this.prisma.tenantDb;
     } else if (options.entityIdSource === 'accessTokenClaims') {
       // login/refresh: няма req.user (маршрутът е @Public()) — четем claims-ите
@@ -116,16 +125,17 @@ export class AuditLogService {
       db = await this.resolveTenantClient(tenantId);
     }
 
-    if (!entityId || !userId) {
+    if (!entityId || !options.entityType || (!userId && !secureLinkId)) {
       this.logger.warn(
-        `Audit: could not resolve entityId/userId for ${options.entityType}/${options.action}`,
+        `Audit: could not resolve entityId/entityType/actor for ${options.entityType}/${options.action}`,
       );
       return;
     }
 
     await db.auditLog.create({
       data: {
-        userId,
+        userId: userId ?? null,
+        secureLinkId: secureLinkId ?? null,
         action: options.action,
         entityType: options.entityType,
         entityId,
